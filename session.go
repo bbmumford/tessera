@@ -1,18 +1,16 @@
-// Package tessera is the scope-agnostic session-persistence core (extracted from HSTLES
-// platform/session). It defines the universal SessionStore contract + a neutral Session record,
-// decoupled from any domain proto: the source's *auth.Session dependency is lifted to tessera's
-// own Session type, so consumers map their session type ↔ tessera.Session at the boundary. The
-// org axis is lifted too — the baked ActiveOrgID / tenantID become an OPAQUE Owner scope the store
-// never interprets. The concrete store (Turso, tursokv, a mesh-RPC gateway) is a consumer-supplied
-// SessionStore implementation; this package owns the contract + lifecycle, not the backend.
+// Package tessera is the scope-agnostic session system. It defines the universal SessionStore
+// contract + a neutral Session record decoupled from any domain proto, so a consumer maps its own
+// session type ↔ tessera.Session at the boundary. The org axis is opaque: a session's Owner is a
+// scope string the store never interprets. The concrete store (a *sql.DB store, tursokv, or a
+// mesh-RPC gateway) is a consumer-supplied SessionStore implementation; this package owns the
+// contract + lifecycle, not the backend.
 //
-// Capability-preserving: every pb.Session field is retained (id/user/owner/audience/provider/
-// timestamps/device/allowed-apps+providers/mfa), the mesh-vs-Turso store split stays behind the
-// interface, and expiry/rotation/wipe/list are the same operations. Only the TYPE is neutral and the
-// axis is opaque. The whole session system is ONE package: the neutral store contract (this file),
-// an in-memory reference store (memstore.go), and the HTTP cookie/session lifecycle + attach
-// middleware (cookie.go, middleware.go) driven by a Manager over an injected store, DomainResolver,
-// and owner axis. A durable store (Turso/tursokv/mesh-RPC) is the one thing a consumer supplies.
+// The whole session system is ONE package: the neutral store contract (this file), an in-memory
+// reference store (memstore.go), and the HTTP cookie/session lifecycle + attach middleware
+// (cookie.go, middleware.go) driven by a Manager over an injected store, DomainResolver, and owner
+// axis. A durable store is the one thing a consumer supplies. Every session field
+// (id/user/owner/audience/provider/timestamps/device/allowed-apps+providers/mfa) and every operation
+// (expiry/rotation/wipe/list) is preserved; only the type is neutral and the axis is opaque.
 package tessera
 
 import (
@@ -20,9 +18,8 @@ import (
 	"time"
 )
 
-// Session is the neutral session record. Owner is the OPAQUE owner-scope (was ActiveOrgID); the
-// store never interprets it. ExpiresAt is a pointer: nil means MaxAge/rolling semantics (preserved
-// from the source's optional-expiry oneof).
+// Session is the neutral session record. Owner is the OPAQUE owner-scope; the store never interprets
+// it. ExpiresAt is a pointer: nil means MaxAge/rolling semantics (no fixed expiry).
 type Session struct {
 	ID               string
 	UserID           string

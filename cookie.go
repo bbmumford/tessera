@@ -107,11 +107,10 @@ type Config struct {
 	Logf func(string, ...any)
 }
 
-// Manager owns the HTTP cookie/session lifecycle over an injected SessionStore. It replaces the
-// source package-global backend singleton: every dependency (store, domain resolver, owner axis,
-// clock, logger) is supplied at construction, so two Managers with different stores coexist and no
-// hidden global state is shared. HTTP ceremony (Set-Cookie, domain scoping, size guard) lives here;
-// persistence lives behind Store.
+// Manager owns the HTTP cookie/session lifecycle over an injected SessionStore. Every dependency
+// (store, domain resolver, owner axis, clock, logger) is supplied at construction — no package-global
+// singleton — so two Managers with different stores coexist and no hidden global state is shared.
+// HTTP ceremony (Set-Cookie, domain scoping, size guard) lives here; persistence lives behind Store.
 type Manager struct {
 	store      SessionStore
 	domains    DomainResolver
@@ -123,8 +122,7 @@ type Manager struct {
 }
 
 // NewManager validates the config and returns a Manager. It errors when Store, Domains, or a
-// non-empty CookieName is missing rather than panicking at first mint (the source panicked on an
-// unregistered cookie name).
+// non-empty CookieName is missing rather than panicking later at first mint.
 func NewManager(c Config) (*Manager, error) {
 	if c.Store == nil {
 		return nil, errors.New("tessera: Config.Store is required")
