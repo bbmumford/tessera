@@ -6,10 +6,13 @@
 // never interprets. The concrete store (Turso, tursokv, a mesh-RPC gateway) is a consumer-supplied
 // SessionStore implementation; this package owns the contract + lifecycle, not the backend.
 //
-// Capability-preserving (§19): every pb.Session field is retained (id/user/owner/audience/provider/
+// Capability-preserving: every pb.Session field is retained (id/user/owner/audience/provider/
 // timestamps/device/allowed-apps+providers/mfa), the mesh-vs-Turso store split stays behind the
 // interface, and expiry/rotation/wipe/list are the same operations. Only the TYPE is neutral and the
-// axis is opaque. Cookie/middleware (HTTP layer) + a Turso reference impl are separate slices.
+// axis is opaque. The whole session system is ONE package: the neutral store contract (this file),
+// an in-memory reference store (memstore.go), and the HTTP cookie/session lifecycle + attach
+// middleware (cookie.go, middleware.go) driven by a Manager over an injected store, DomainResolver,
+// and owner axis. A durable store (Turso/tursokv/mesh-RPC) is the one thing a consumer supplies.
 package tessera
 
 import (
