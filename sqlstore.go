@@ -14,7 +14,7 @@ import (
 // standalone store. The package imports only database/sql (stdlib); the APP supplies the opened
 // *sql.DB and registers the driver (go-libsql/Turso, modernc SQLite, Postgres, …), so tessera pulls
 // no driver dependency yet works out of the box. It persists every neutral Session field; the opaque
-// Owner is a plain column the store never interprets, and it is the only axis WipeUser/ListUserSessions
+// Partition is a plain column the store never interprets, and it is the only axis WipeUser/ListUserSessions
 // filter by. The SessionStore interface remains the escape-hatch for a mesh-gateway or in-memory
 // (MemStore) backend. Times are Unix seconds; a nil ExpiresAt is stored NULL (MaxAge/rolling).
 type SQLStore struct {
@@ -46,7 +46,7 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_key TEXT UNIQUE NOT NULL,
 			user_id TEXT NOT NULL,
-			owner TEXT NOT NULL DEFAULT '',
+			partition TEXT NOT NULL DEFAULT '',
 			audience_root TEXT NOT NULL DEFAULT '',
 			provider TEXT NOT NULL DEFAULT '',
 			issued_at INTEGER NOT NULL DEFAULT 0,
@@ -59,7 +59,7 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			allowed_providers TEXT NOT NULL DEFAULT '[]',
 			require_mfa INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_owner_user ON tessera_sessions(owner, user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_owner_user ON tessera_sessions(partition, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_expires ON tessera_sessions(expires_at)`,
 	}
 	for _, q := range stmts {
@@ -115,9 +115,9 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO tessera_sessions
-			(session_key, user_id, owner, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa)
+			(session_key, user_id, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		key, cp.UserID, cp.Owner, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
+		key, cp.UserID, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
 		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA))
 	if err != nil {
 		return "", 0, err
@@ -138,7 +138,7 @@ func (s *SQLStore) CreateWithID(ctx context.Context, sess *Session) (string, int
 	return s.insert(ctx, sess)
 }
 
-const sessionSelect = `SELECT session_key, user_id, owner, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa FROM tessera_sessions`
+const sessionSelect = `SELECT session_key, user_id, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa FROM tessera_sessions`
 
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var v Session
@@ -146,7 +146,7 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var expires sql.NullInt64
 	var apps, providers string
 	var mfa int64
-	if err := sc.Scan(&v.ID, &v.UserID, &v.Owner, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
+	if err := sc.Scan(&v.ID, &v.UserID, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
 		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa); err != nil {
 		return nil, err
 	}
@@ -215,9 +215,9 @@ func (s *SQLStore) Rotate(ctx context.Context, id string) (string, error) {
 	return newID, nil
 }
 
-// WipeUser deletes every session for (owner, userID). owner is the opaque owner-scope.
-func (s *SQLStore) WipeUser(ctx context.Context, owner, userID string) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE owner = ? AND user_id = ?`, owner, userID)
+// WipeUser deletes every session for (partition, userID). partition is the opaque partition-scope.
+func (s *SQLStore) WipeUser(ctx context.Context, partition, userID string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE partition = ? AND user_id = ?`, partition, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -225,9 +225,9 @@ func (s *SQLStore) WipeUser(ctx context.Context, owner, userID string) (int64, e
 	return n, nil
 }
 
-// ListUserSessions returns every unexpired session for (owner, userID) at the current instant.
-func (s *SQLStore) ListUserSessions(ctx context.Context, owner, userID string) ([]*Session, error) {
-	rows, err := s.db.QueryContext(ctx, sessionSelect+` WHERE owner = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?)`, owner, userID, s.now().Unix())
+// ListUserSessions returns every unexpired session for (partition, userID) at the current instant.
+func (s *SQLStore) ListUserSessions(ctx context.Context, partition, userID string) ([]*Session, error) {
+	rows, err := s.db.QueryContext(ctx, sessionSelect+` WHERE partition = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?)`, partition, userID, s.now().Unix())
 	if err != nil {
 		return nil, err
 	}

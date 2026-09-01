@@ -86,7 +86,7 @@ func hostWithoutPort(host string) string {
 	return host
 }
 
-// Config wires a Manager. Store and Domains are required; OwnerFromContext and Logf are optional.
+// Config wires a Manager. Store and Domains are required; PartitionFromContext and Logf are optional.
 type Config struct {
 	// Store persists sessions. Required. An auth node supplies a LocalSessionStore (Turso/tursokv);
 	// a thin gateway supplies a mesh-RPC-backed SessionStore. Both satisfy the same contract.
@@ -96,9 +96,9 @@ type Config struct {
 	// CookieName is the default cookie name (e.g. "orbtr_session"). Required and non-empty; an
 	// Options.CookieName overrides it per call.
 	CookieName string
-	// OwnerFromContext resolves the opaque owner-scope for WipeUser/ListUserSessions from the request
-	// context (the axis seam that replaces a baked tenant extractor). Nil ⇒ empty owner.
-	OwnerFromContext func(context.Context) string
+	// PartitionFromContext resolves the opaque partition-scope for WipeUser/ListUserSessions from the request
+	// context (the axis seam that replaces a baked tenant extractor). Nil ⇒ empty partition.
+	PartitionFromContext func(context.Context) string
 	// DefaultMaxAgeSeconds overrides the 30-day cookie/session lifetime default when > 0.
 	DefaultMaxAgeSeconds int
 	// Now is the clock (default time.Now); injectable for deterministic tests.
@@ -108,14 +108,14 @@ type Config struct {
 }
 
 // Manager owns the HTTP cookie/session lifecycle over an injected SessionStore. Every dependency
-// (store, domain resolver, owner axis, clock, logger) is supplied at construction — no package-global
+// (store, domain resolver, partition axis, clock, logger) is supplied at construction — no package-global
 // singleton — so two Managers with different stores coexist and no hidden global state is shared.
 // HTTP ceremony (Set-Cookie, domain scoping, size guard) lives here; persistence lives behind Store.
 type Manager struct {
 	store      SessionStore
 	domains    DomainResolver
 	cookieName string
-	ownerCtx   func(context.Context) string
+	partitionCtx   func(context.Context) string
 	defaultTTL int
 	now        func() time.Time
 	logf       func(string, ...any)
@@ -137,7 +137,7 @@ func NewManager(c Config) (*Manager, error) {
 		store:      c.Store,
 		domains:    c.Domains,
 		cookieName: c.CookieName,
-		ownerCtx:   c.OwnerFromContext,
+		partitionCtx:   c.PartitionFromContext,
 		defaultTTL: c.DefaultMaxAgeSeconds,
 		now:        c.Now,
 		logf:       c.Logf,
@@ -154,12 +154,12 @@ func NewManager(c Config) (*Manager, error) {
 	return m, nil
 }
 
-// owner resolves the opaque owner-scope from context, or "" when no resolver is wired.
-func (m *Manager) owner(ctx context.Context) string {
-	if m.ownerCtx == nil {
+// partition resolves the opaque partition-scope from context, or "" when no resolver is wired.
+func (m *Manager) partition(ctx context.Context) string {
+	if m.partitionCtx == nil {
 		return ""
 	}
-	return m.ownerCtx(ctx)
+	return m.partitionCtx(ctx)
 }
 
 // effectiveOptions folds per-call Options over the Manager defaults. Secure/HTTPOnly stay hardened
@@ -240,8 +240,8 @@ func (m *Manager) expiry(maxAgeSeconds int) *time.Time {
 }
 
 // Mint creates a session and issues its cookie, scoping the cookie to the request's validated root
-// domain. owner is the opaque owner-scope stamped on the session.
-func (m *Manager) Mint(w http.ResponseWriter, r *http.Request, userID, provider, owner string, opts *Options) (string, error) {
+// domain. partition is the opaque partition-scope stamped on the session.
+func (m *Manager) Mint(w http.ResponseWriter, r *http.Request, userID, provider, partition string, opts *Options) (string, error) {
 	domain, err := m.deriveDomain(r)
 	if err != nil {
 		return "", fmt.Errorf("derive domain: %w", err)
@@ -251,7 +251,7 @@ func (m *Manager) Mint(w http.ResponseWriter, r *http.Request, userID, provider,
 	s := &Session{
 		UserID:     userID,
 		Provider:   provider,
-		Owner:      owner,
+		Partition:      partition,
 		IssuedAt:   now,
 		LastUsedAt: now,
 		ExpiresAt:  m.expiry(eff.MaxAgeSeconds),
@@ -269,7 +269,7 @@ func (m *Manager) Mint(w http.ResponseWriter, r *http.Request, userID, provider,
 
 // MintWithMeta is Mint plus captured client metadata (browser/device/platform). HTTP ceremony is
 // identical regardless of which store owns the row.
-func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, userID, provider, browser, deviceType, platform, owner string, opts *Options) (string, error) {
+func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, userID, provider, browser, deviceType, platform, partition string, opts *Options) (string, error) {
 	domain, err := m.deriveDomain(r)
 	if err != nil {
 		return "", fmt.Errorf("derive domain: %w", err)
@@ -279,7 +279,7 @@ func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, userID, p
 	s := &Session{
 		UserID:     userID,
 		Provider:   provider,
-		Owner:      owner,
+		Partition:      partition,
 		IssuedAt:   now,
 		LastUsedAt: now,
 		ExpiresAt:  m.expiry(eff.MaxAgeSeconds),
@@ -302,7 +302,7 @@ func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, userID, p
 // and returns the session key plus numeric id (for linking JWT/app tokens). It requires the Store to
 // be a LocalSessionStore, because the numeric id has no mesh-RPC equivalent — a thin gateway gets an
 // error. maxAgeSeconds<=0 defaults to 30 days.
-func (m *Manager) CreateAppSession(ctx context.Context, userID, provider, browser, deviceType, platform, owner string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
+func (m *Manager) CreateAppSession(ctx context.Context, userID, provider, browser, deviceType, platform, partition string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
 	local, ok := m.store.(LocalSessionStore)
 	if !ok {
 		return "", 0, errors.New("tessera: CreateAppSession requires a LocalSessionStore (auth node only)")
@@ -314,7 +314,7 @@ func (m *Manager) CreateAppSession(ctx context.Context, userID, provider, browse
 	s := &Session{
 		UserID:     userID,
 		Provider:   provider,
-		Owner:      owner,
+		Partition:      partition,
 		IssuedAt:   now,
 		LastUsedAt: now,
 		ExpiresAt:  m.expiry(maxAgeSeconds),
@@ -365,7 +365,7 @@ func (m *Manager) LogoutCurrent(w http.ResponseWriter, r *http.Request, opts *Op
 	return nil
 }
 
-// LogoutAll wipes every session for the current user (within the opaque owner-scope) and clears the
+// LogoutAll wipes every session for the current user (within the opaque partition-scope) and clears the
 // cookie. The user is resolved from context first, then from the cookie's session.
 func (m *Manager) LogoutAll(w http.ResponseWriter, r *http.Request, opts *Options) error {
 	domain, err := m.deriveDomain(r)
@@ -388,7 +388,7 @@ func (m *Manager) LogoutAll(w http.ResponseWriter, r *http.Request, opts *Option
 	if userID == "" {
 		return errors.New("tessera: no user session found to wipe")
 	}
-	_, _ = m.store.WipeUser(r.Context(), m.owner(r.Context()), userID)
+	_, _ = m.store.WipeUser(r.Context(), m.partition(r.Context()), userID)
 	m.clearCookie(w, eff.CookieName, domain)
 	return nil
 }
@@ -425,9 +425,9 @@ func (m *Manager) ProbeSession(ctx context.Context, id string) (bool, error) {
 	return true, nil
 }
 
-// GetUserSessions lists every session for userID within the opaque owner-scope drawn from context.
+// GetUserSessions lists every session for userID within the opaque partition-scope drawn from context.
 func (m *Manager) GetUserSessions(ctx context.Context, userID string) ([]*Session, error) {
-	return m.store.ListUserSessions(ctx, m.owner(ctx), userID)
+	return m.store.ListUserSessions(ctx, m.partition(ctx), userID)
 }
 
 // DeleteSession deletes a session by id.

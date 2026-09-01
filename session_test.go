@@ -15,8 +15,8 @@ func newTestStore(now time.Time) *MemStore {
 	return m
 }
 
-func sample(owner, user string) *Session {
-	return &Session{UserID: user, Owner: owner, Provider: "email", Browser: "curl", AllowedApps: []string{"app1"}}
+func sample(partition, user string) *Session {
+	return &Session{UserID: user, Partition: partition, Provider: "email", Browser: "curl", AllowedApps: []string{"app1"}}
 }
 
 func TestCreateGet_RoundTrip(t *testing.T) {
@@ -30,7 +30,7 @@ func TestCreateGet_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.UserID != "u1" || got.Owner != "acme" || got.ID != id {
+	if got.UserID != "u1" || got.Partition != "acme" || got.ID != id {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 	if got.IssuedAt.IsZero() || !got.LastUsedAt.Equal(got.IssuedAt) {
@@ -61,14 +61,14 @@ func TestRotate_ReKeysAndDropsOld(t *testing.T) {
 	}
 }
 
-// TestOpaqueOwner_WipeAndList: the store keys wipe/list by the OPAQUE (owner, user) pair and never
-// interprets owner — a different owner value is a distinct partition.
+// TestOpaqueOwner_WipeAndList: the store keys wipe/list by the OPAQUE (partition, user) pair and never
+// interprets partition — a different partition value is a distinct partition.
 func TestOpaqueOwner_WipeAndList(t *testing.T) {
 	ctx := context.Background()
 	m := newTestStore(time.Unix(1000, 0))
 	m.Create(ctx, sample("acme", "u1"))
 	m.Create(ctx, sample("acme", "u1"))
-	m.Create(ctx, sample("globex", "u1")) // same user, DIFFERENT owner → separate partition
+	m.Create(ctx, sample("globex", "u1")) // same user, DIFFERENT partition → separate partition
 	acme, _ := m.ListUserSessions(ctx, "acme", "u1")
 	if len(acme) != 2 {
 		t.Fatalf("acme/u1 should have 2 sessions; got %d", len(acme))
@@ -77,10 +77,10 @@ func TestOpaqueOwner_WipeAndList(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("WipeUser removed %d, want 2", n)
 	}
-	// globex/u1 is untouched — owner is an opaque partition.
+	// globex/u1 is untouched — partition is an opaque partition.
 	globex, _ := m.ListUserSessions(ctx, "globex", "u1")
 	if len(globex) != 1 {
-		t.Fatalf("a different owner must be an independent partition; globex/u1 has %d", len(globex))
+		t.Fatalf("a different partition must be an independent partition; globex/u1 has %d", len(globex))
 	}
 }
 

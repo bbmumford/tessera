@@ -115,13 +115,13 @@ func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	return newID, nil
 }
 
-// WipeUser deletes every session for (owner, userID). owner is the opaque owner-scope.
-func (m *MemStore) WipeUser(_ context.Context, owner, userID string) (int64, error) {
+// WipeUser deletes every session for (partition, userID). partition is the opaque partition-scope.
+func (m *MemStore) WipeUser(_ context.Context, partition, userID string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
 	for id, s := range m.byID {
-		if s.Owner == owner && s.UserID == userID {
+		if s.Partition == partition && s.UserID == userID {
 			delete(m.byID, id)
 			n++
 		}
@@ -129,13 +129,13 @@ func (m *MemStore) WipeUser(_ context.Context, owner, userID string) (int64, err
 	return n, nil
 }
 
-// ListUserSessions returns every session for (owner, userID).
-func (m *MemStore) ListUserSessions(_ context.Context, owner, userID string) ([]*Session, error) {
+// ListUserSessions returns every session for (partition, userID).
+func (m *MemStore) ListUserSessions(_ context.Context, partition, userID string) ([]*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Session
 	for _, s := range m.byID {
-		if s.Owner == owner && s.UserID == userID {
+		if s.Partition == partition && s.UserID == userID {
 			out = append(out, s.Clone())
 		}
 	}

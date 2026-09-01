@@ -32,7 +32,7 @@ func TestSQLStore_CreateGetRoundTripAllFields(t *testing.T) {
 	s := newSQLStore(t, now)
 	exp := time.Unix(9000, 0)
 	in := &Session{
-		UserID: "u1", Owner: "acme", AudienceRoot: "app.example.com", Provider: "email",
+		UserID: "u1", Partition: "acme", AudienceRoot: "app.example.com", Provider: "email",
 		ExpiresAt: &exp, Browser: "curl", DeviceType: "cli", Platform: "linux",
 		AllowedApps: []string{"a", "b"}, AllowedProviders: []string{"email"}, RequireMFA: true,
 	}
@@ -44,7 +44,7 @@ func TestSQLStore_CreateGetRoundTripAllFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.UserID != "u1" || got.Owner != "acme" || got.AudienceRoot != "app.example.com" ||
+	if got.UserID != "u1" || got.Partition != "acme" || got.AudienceRoot != "app.example.com" ||
 		got.Provider != "email" || got.Browser != "curl" || got.DeviceType != "cli" || got.Platform != "linux" ||
 		!got.RequireMFA || len(got.AllowedApps) != 2 || len(got.AllowedProviders) != 1 {
 		t.Fatalf("round-trip lost a field: %+v", got)
@@ -63,7 +63,7 @@ func TestSQLStore_CreateGetRoundTripAllFields(t *testing.T) {
 func TestSQLStore_CreateWithIDNumeric(t *testing.T) {
 	ctx := context.Background()
 	s := newSQLStore(t, time.Unix(1000, 0))
-	key, num, err := s.CreateWithID(ctx, &Session{UserID: "u1", Owner: "acme"})
+	key, num, err := s.CreateWithID(ctx, &Session{UserID: "u1", Partition: "acme"})
 	if err != nil || key == "" || num == 0 {
 		t.Fatalf("CreateWithID must return key + numeric id; %q %d %v", key, num, err)
 	}
@@ -72,7 +72,7 @@ func TestSQLStore_CreateWithIDNumeric(t *testing.T) {
 func TestSQLStore_RotateReKeysAndDropsOld(t *testing.T) {
 	ctx := context.Background()
 	s := newSQLStore(t, time.Unix(1000, 0))
-	id, _ := s.Create(ctx, &Session{UserID: "u1", Owner: "acme"})
+	id, _ := s.Create(ctx, &Session{UserID: "u1", Partition: "acme"})
 	newID, err := s.Rotate(ctx, id)
 	if err != nil || newID == id || newID == "" {
 		t.Fatalf("Rotate: %q %v", newID, err)
@@ -92,9 +92,9 @@ func TestSQLStore_OpaqueOwnerWipeAndList(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1000, 0)
 	s := newSQLStore(t, now)
-	s.Create(ctx, &Session{UserID: "u1", Owner: "acme"})
-	s.Create(ctx, &Session{UserID: "u1", Owner: "acme"})
-	s.Create(ctx, &Session{UserID: "u1", Owner: "globex"}) // same user, different owner
+	s.Create(ctx, &Session{UserID: "u1", Partition: "acme"})
+	s.Create(ctx, &Session{UserID: "u1", Partition: "acme"})
+	s.Create(ctx, &Session{UserID: "u1", Partition: "globex"}) // same user, different partition
 	if got, _ := s.ListUserSessions(ctx, "acme", "u1"); len(got) != 2 {
 		t.Fatalf("acme/u1 must have 2 live sessions; got %d", len(got))
 	}
@@ -103,7 +103,7 @@ func TestSQLStore_OpaqueOwnerWipeAndList(t *testing.T) {
 		t.Fatalf("WipeUser removed %d, want 2", n)
 	}
 	if got, _ := s.ListUserSessions(ctx, "globex", "u1"); len(got) != 1 {
-		t.Fatal("a different owner is an independent partition")
+		t.Fatal("a different partition is an independent partition")
 	}
 }
 
@@ -113,9 +113,9 @@ func TestSQLStore_ListExcludesExpiredAndPurge(t *testing.T) {
 	s := newSQLStore(t, now)
 	past := time.Unix(1000, 0)
 	future := time.Unix(9000, 0)
-	s.Create(ctx, &Session{UserID: "u1", Owner: "acme", ExpiresAt: &past})   // expired
-	s.Create(ctx, &Session{UserID: "u1", Owner: "acme", ExpiresAt: &future}) // live
-	s.Create(ctx, &Session{UserID: "u1", Owner: "acme"})                     // no expiry → live
+	s.Create(ctx, &Session{UserID: "u1", Partition: "acme", ExpiresAt: &past})   // expired
+	s.Create(ctx, &Session{UserID: "u1", Partition: "acme", ExpiresAt: &future}) // live
+	s.Create(ctx, &Session{UserID: "u1", Partition: "acme"})                     // no expiry → live
 	if got, _ := s.ListUserSessions(ctx, "acme", "u1"); len(got) != 2 {
 		t.Fatalf("ListUserSessions must exclude the expired one; got %d", len(got))
 	}
@@ -128,7 +128,7 @@ func TestSQLStore_ListExcludesExpiredAndPurge(t *testing.T) {
 func TestSQLStore_TouchUpdatesLastUsedAndExpiry(t *testing.T) {
 	ctx := context.Background()
 	s := newSQLStore(t, time.Unix(1000, 0))
-	id, _ := s.Create(ctx, &Session{UserID: "u1", Owner: "acme"})
+	id, _ := s.Create(ctx, &Session{UserID: "u1", Partition: "acme"})
 	s.now = func() time.Time { return time.Unix(2000, 0) }
 	newExp := time.Unix(9000, 0)
 	if err := s.Touch(ctx, id, &newExp); err != nil {
