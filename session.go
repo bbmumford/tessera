@@ -23,7 +23,7 @@ import (
 type Session struct {
 	ID               string
 	UserID           string
-	Partition            string // opaque partition-scope (was ActiveOrgID) — meaning is the consumer's
+	Partition        string // opaque partition scope; its meaning is the consumer's
 	AudienceRoot     string // eTLD+1 for app-local sessions; empty for central
 	Provider         string // auth provider (email/github/google/msft/…)
 	IssuedAt         time.Time
