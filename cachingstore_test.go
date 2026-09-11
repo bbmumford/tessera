@@ -18,6 +18,9 @@ type countingStore struct {
 	getErr   error
 	delErr   error
 	wiped    int64
+
+	wipeCalls int
+	listCalls int
 }
 
 func (c *countingStore) Create(context.Context, *Session) (string, error) { return "new", nil }
@@ -31,16 +34,18 @@ func (c *countingStore) Get(_ context.Context, _ string) (*Session, error) {
 func (c *countingStore) Touch(context.Context, string, *time.Time) error { return nil }
 func (c *countingStore) Delete(context.Context, string) error            { return c.delErr }
 func (c *countingStore) Rotate(context.Context, string) (string, error)  { return "rotated", nil }
-func (c *countingStore) WipeUser(context.Context, string, string) (int64, error) {
+func (c *countingStore) WipeSubject(context.Context, string, string) (int64, error) {
+	c.wipeCalls++
 	return c.wiped, nil
 }
-func (c *countingStore) ListUserSessions(context.Context, string, string) ([]*Session, error) {
+func (c *countingStore) ListSubjectSessions(context.Context, string, string) ([]*Session, error) {
+	c.listCalls++
 	return nil, nil
 }
 
 func liveSession(id string) *Session {
 	exp := time.Now().Add(time.Hour)
-	return &Session{ID: id, UserID: "u1", Partition: "p1", ExpiresAt: &exp}
+	return &Session{ID: id, Subject: "u1", Partition: "p1", ExpiresAt: &exp}
 }
 
 func TestCachingStoreServesSecondReadFromCache(t *testing.T) {
@@ -143,14 +148,14 @@ func TestCachingStoreTouchEvictsTheStaleExpiry(t *testing.T) {
 	}
 }
 
-func TestCachingStoreWipeUserClearsEverythingItCannotName(t *testing.T) {
+func TestCachingStoreWipeSubjectClearsEverythingItCannotName(t *testing.T) {
 	inner := &countingStore{sess: liveSession("s1")}
 	c := NewCachingStore(inner, time.Hour)
 	ctx := context.Background()
 	_, _ = c.Get(ctx, "s1")
 	_, _ = c.Get(ctx, "s2")
 	before := inner.getCalls
-	if _, err := c.WipeUser(ctx, "p1", "u1"); err != nil {
+	if _, err := c.WipeSubject(ctx, "p1", "u1"); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = c.Get(ctx, "s1")
@@ -174,10 +179,10 @@ func TestCachingStoreReturnsCopiesNotTheCachedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hit.UserID = "attacker"
+	hit.Subject = "attacker"
 	third, _ := c.Get(ctx, "s1")
-	if third.UserID != "u1" {
-		t.Fatalf("later read saw UserID %q — a caller's mutation reached the cached copy", third.UserID)
+	if third.Subject != "u1" {
+		t.Fatalf("later read saw Subject %q — a caller's mutation reached the cached copy", third.Subject)
 	}
 }
 

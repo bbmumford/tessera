@@ -34,7 +34,7 @@ const DefaultCacheTTL = 30 * time.Second
 // what a caller can invent.
 //
 // Every mutation evicts before it returns, so a logout or rotation takes effect
-// on the next request rather than at the end of the TTL. WipeUser clears the
+// on the next request rather than at the end of the TTL. WipeSubject clears the
 // cache entirely: it removes sessions this layer cannot name, and evicting only
 // what it can name would leave the rest validating.
 type CachingStore struct {
@@ -179,28 +179,36 @@ func (c *CachingStore) Rotate(ctx context.Context, id string) (string, error) {
 	return newID, err
 }
 
-// WipeUser writes through and clears the WHOLE cache. It removes sessions by
-// user, and this layer indexes by session id alone, so it cannot name which
+// WipeSubject writes through and clears the WHOLE cache. It removes sessions by
+// subject, and this layer indexes by session id alone, so it cannot name which
 // entries the wipe covered — dropping only the ones it could name would leave
-// the others resolving for a user who was just signed out everywhere.
-func (c *CachingStore) WipeUser(ctx context.Context, partition, userID string) (int64, error) {
+// the others resolving for a subject who was just signed out everywhere. An
+// empty partition is refused here, before the cache is cleared, so a refused
+// wipe changes nothing.
+func (c *CachingStore) WipeSubject(ctx context.Context, partition, subject string) (int64, error) {
 	if c == nil || c.inner == nil {
 		return 0, ErrNoStore
 	}
-	n, err := c.inner.WipeUser(ctx, partition, userID)
+	if partition == "" {
+		return 0, ErrPartitionRequired
+	}
+	n, err := c.inner.WipeSubject(ctx, partition, subject)
 	c.mu.Lock()
 	c.cache = map[string]cacheEntry{}
 	c.mu.Unlock()
 	return n, err
 }
 
-// ListUserSessions passes through uncached: it is an enumeration whose staleness
+// ListSubjectSessions passes through uncached: it is an enumeration whose staleness
 // would be visible to a person reading their own session list.
-func (c *CachingStore) ListUserSessions(ctx context.Context, partition, userID string) ([]*Session, error) {
+func (c *CachingStore) ListSubjectSessions(ctx context.Context, partition, subject string) ([]*Session, error) {
 	if c == nil || c.inner == nil {
 		return nil, ErrNoStore
 	}
-	return c.inner.ListUserSessions(ctx, partition, userID)
+	if partition == "" {
+		return nil, ErrPartitionRequired
+	}
+	return c.inner.ListSubjectSessions(ctx, partition, subject)
 }
 
 // CachingStore is a SessionStore.

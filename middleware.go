@@ -35,7 +35,7 @@ func (m *Manager) AttachSession(next http.Handler) http.Handler {
 			return
 		}
 		if sess.ExpiresAt != nil && sess.ExpiresAt.Before(m.now()) {
-			m.logf("attach: expired path=%s userID=%q", r.URL.Path, sess.UserID)
+			m.logf("attach: expired path=%s subject=%q", r.URL.Path, sess.Subject)
 			next.ServeHTTP(w, r)
 			return
 		}

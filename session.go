@@ -1,29 +1,31 @@
-// Package tessera is the scope-agnostic session system. It defines the universal SessionStore
-// contract + a neutral Session record decoupled from any domain proto, so a consumer maps its own
-// session type ↔ tessera.Session at the boundary. The org axis is opaque: a session's Partition is a
-// scope string the store never interprets. The concrete store (a *sql.DB store, tursokv, or a
-// mesh-RPC gateway) is a consumer-supplied SessionStore implementation; this package owns the
-// contract + lifecycle, not the backend.
+// Package tessera is the session system. It defines the SessionStore contract and a neutral Session
+// record, so a consumer maps its own session type to tessera.Session at its boundary. A session binds
+// a subject to a partition; both are opaque strings the store keys on and never interprets.
 //
-// The whole session system is ONE package: the neutral store contract (this file), an in-memory
-// reference store (memstore.go), and the HTTP cookie/session lifecycle + attach middleware
-// (cookie.go, middleware.go) driven by a Manager over an injected store, DomainResolver, and partition
-// axis. A durable store is the one thing a consumer supplies. Every session field
-// (id/user/partition/audience/provider/timestamps/device/allowed-apps+providers/mfa) and every operation
-// (expiry/rotation/wipe/list) is preserved; only the type is neutral and the axis is opaque.
+// The whole session system is ONE package: the store contract (this file), an in-memory store
+// (memstore.go), a database/sql store (sqlstore.go), a read-through cache for a gateway whose store is
+// remote (cachingstore.go), and the HTTP cookie lifecycle and attach middleware (cookie.go,
+// middleware.go) driven by a Manager over an injected store, DomainResolver and partition resolver.
 package tessera
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
-// Session is the neutral session record. Partition is the OPAQUE partition-scope; the store never interprets
-// it. ExpiresAt is a pointer: nil means MaxAge/rolling semantics (no fixed expiry).
+// ErrPartitionRequired is returned by every store operation that writes or selects sessions by
+// partition when the partition is empty. The check runs before any row is read or written, so an
+// unresolved partition can neither create an unpartitioned session nor list or wipe one.
+var ErrPartitionRequired = errors.New("tessera: partition is required")
+
+// Session is the neutral session record. Subject is the authenticated principal's subject and
+// Partition the partition the session was minted in; the store keys on both and interprets neither.
+// ExpiresAt is a pointer: nil means MaxAge/rolling semantics (no fixed expiry).
 type Session struct {
 	ID               string
-	UserID           string
-	Partition        string // opaque partition scope; its meaning is the consumer's
+	Subject          string
+	Partition        string // required: Create refuses an empty one
 	AudienceRoot     string // eTLD+1 for app-local sessions; empty for central
 	Provider         string // auth provider (email/github/google/msft/…)
 	IssuedAt         time.Time
@@ -54,16 +56,18 @@ func (s *Session) Clone() *Session {
 
 // SessionStore is the universal session-persistence API — every operation works from every
 // endpoint, whether or not the caller owns the platform DB. A thin gateway gets a mesh-RPC-backed
-// implementation; the auth node gets a Turso-backed one. Callers program against this type. The
-// `partition` argument on WipeUser/ListUserSessions is the OPAQUE partition-scope (was tenantID).
+// implementation; the auth node gets a Turso-backed one. Callers program against this type.
+// Create, WipeSubject and ListSubjectSessions return ErrPartitionRequired for an empty partition
+// before touching any row; Get, Touch, Delete and Rotate select by session key alone, because the
+// key is the bearer secret the cookie carries.
 type SessionStore interface {
 	Create(ctx context.Context, s *Session) (id string, err error)
 	Get(ctx context.Context, id string) (*Session, error)
 	Touch(ctx context.Context, id string, newExpiry *time.Time) error
 	Delete(ctx context.Context, id string) error
 	Rotate(ctx context.Context, id string) (newID string, err error)
-	WipeUser(ctx context.Context, partition, userID string) (int64, error)
-	ListUserSessions(ctx context.Context, partition, userID string) ([]*Session, error)
+	WipeSubject(ctx context.Context, partition, subject string) (int64, error)
+	ListSubjectSessions(ctx context.Context, partition, subject string) ([]*Session, error)
 }
 
 // LocalSessionStore extends SessionStore with auth-node-only operations that need a numeric DB id
@@ -77,6 +81,3 @@ type LocalSessionStore interface {
 	// PurgeExpired deletes sessions whose ExpiresAt is before the given instant.
 	PurgeExpired(ctx context.Context, before time.Time) (int64, error)
 }
-
-// Backend is the legacy name for SessionStore, kept as an alias so existing callers compile.
-type Backend = SessionStore

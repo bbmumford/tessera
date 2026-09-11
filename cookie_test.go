@@ -13,11 +13,11 @@ func testManager(t *testing.T, now time.Time) (*Manager, *MemStore) {
 	t.Helper()
 	store := newTestStore(now)
 	m, err := NewManager(Config{
-		Store:            store,
-		Domains:          StaticDomainResolver{Roots: []string{"example.com"}},
-		CookieName:       "orbtr_session",
+		Store:                store,
+		Domains:              StaticDomainResolver{Roots: []string{"example.com"}},
+		CookieName:           "orbtr_session",
 		PartitionFromContext: func(context.Context) string { return "acme" },
-		Now:              func() time.Time { return now },
+		Now:                  func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
@@ -127,23 +127,23 @@ func TestLogoutCurrent_DeletesAndClears(t *testing.T) {
 	}
 }
 
-func TestLogoutAll_WipesOwnerScopedUser(t *testing.T) {
+func TestLogoutAll_WipesTheSubjectInItsPartition(t *testing.T) {
 	m, store := testManager(t, time.Unix(1000, 0))
 	// two sessions for acme/u1, one for a different partition
 	w := httptest.NewRecorder()
 	id, _ := m.Mint(w, reqTo("app.example.com"), "u1", "email", "acme", nil)
 	m.Mint(httptest.NewRecorder(), reqTo("app.example.com"), "u1", "email", "acme", nil)
-	store.Create(context.Background(), &Session{UserID: "u1", Partition: "globex"})
+	store.Create(context.Background(), &Session{Subject: "u1", Partition: "globex"})
 
 	r := reqTo("app.example.com")
 	r.AddCookie(&http.Cookie{Name: "orbtr_session", Value: id})
 	if err := m.LogoutAll(httptest.NewRecorder(), r, nil); err != nil {
 		t.Fatalf("LogoutAll: %v", err)
 	}
-	if got, _ := store.ListUserSessions(context.Background(), "acme", "u1"); len(got) != 0 {
+	if got, _ := store.ListSubjectSessions(context.Background(), "acme", "u1"); len(got) != 0 {
 		t.Fatalf("acme/u1 sessions must be wiped; %d remain", len(got))
 	}
-	if got, _ := store.ListUserSessions(context.Background(), "globex", "u1"); len(got) != 1 {
+	if got, _ := store.ListSubjectSessions(context.Background(), "globex", "u1"); len(got) != 1 {
 		t.Fatal("a different partition is an independent partition and must survive LogoutAll")
 	}
 }
@@ -151,7 +151,7 @@ func TestLogoutAll_WipesOwnerScopedUser(t *testing.T) {
 func TestAttachSession_AttachesLiveAndSoftTouches(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m, store := testManager(t, now)
-	id, _ := store.Create(context.Background(), &Session{UserID: "u1", Partition: "acme"})
+	id, _ := store.Create(context.Background(), &Session{Subject: "u1", Partition: "acme"})
 
 	// advance both clocks so the soft-touch is observable
 	later := time.Unix(2000, 0)
@@ -168,7 +168,7 @@ func TestAttachSession_AttachesLiveAndSoftTouches(t *testing.T) {
 		}
 	})).ServeHTTP(httptest.NewRecorder(), r)
 
-	if seen == nil || seen.UserID != "u1" {
+	if seen == nil || seen.Subject != "u1" {
 		t.Fatal("live session must be attached to context")
 	}
 	got, _ := store.Get(context.Background(), id)
@@ -181,7 +181,7 @@ func TestAttachSession_SkipsExpiredAndMissing(t *testing.T) {
 	now := time.Unix(5000, 0)
 	m, store := testManager(t, now)
 	past := time.Unix(1000, 0)
-	id, _ := store.Create(context.Background(), &Session{UserID: "u1", Partition: "acme", ExpiresAt: &past})
+	id, _ := store.Create(context.Background(), &Session{Subject: "u1", Partition: "acme", ExpiresAt: &past})
 
 	run := func(r *http.Request) bool {
 		attached := false
@@ -206,8 +206,8 @@ func TestProbeSession_LiveExpiredMissing(t *testing.T) {
 	m, store := testManager(t, now)
 	future := time.Unix(9000, 0)
 	past := time.Unix(1000, 0)
-	live, _ := store.Create(context.Background(), &Session{UserID: "u1", Partition: "acme", ExpiresAt: &future})
-	dead, _ := store.Create(context.Background(), &Session{UserID: "u2", Partition: "acme", ExpiresAt: &past})
+	live, _ := store.Create(context.Background(), &Session{Subject: "u1", Partition: "acme", ExpiresAt: &future})
+	dead, _ := store.Create(context.Background(), &Session{Subject: "u2", Partition: "acme", ExpiresAt: &past})
 
 	if ok, _ := m.ProbeSession(context.Background(), live); !ok {
 		t.Fatal("live session must probe true")

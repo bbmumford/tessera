@@ -49,6 +49,9 @@ func (m *MemStore) create(s *Session) (string, int64, error) {
 	if s == nil {
 		return "", 0, errors.New("tessera: nil session")
 	}
+	if s.Partition == "" {
+		return "", 0, ErrPartitionRequired
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := m.newID()
@@ -115,13 +118,16 @@ func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	return newID, nil
 }
 
-// WipeUser deletes every session for (partition, userID). partition is the opaque partition-scope.
-func (m *MemStore) WipeUser(_ context.Context, partition, userID string) (int64, error) {
+// WipeSubject deletes every session for (partition, subject).
+func (m *MemStore) WipeSubject(_ context.Context, partition, subject string) (int64, error) {
+	if partition == "" {
+		return 0, ErrPartitionRequired
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
 	for id, s := range m.byID {
-		if s.Partition == partition && s.UserID == userID {
+		if s.Partition == partition && s.Subject == subject {
 			delete(m.byID, id)
 			n++
 		}
@@ -129,13 +135,16 @@ func (m *MemStore) WipeUser(_ context.Context, partition, userID string) (int64,
 	return n, nil
 }
 
-// ListUserSessions returns every session for (partition, userID).
-func (m *MemStore) ListUserSessions(_ context.Context, partition, userID string) ([]*Session, error) {
+// ListSubjectSessions returns every session for (partition, subject).
+func (m *MemStore) ListSubjectSessions(_ context.Context, partition, subject string) ([]*Session, error) {
+	if partition == "" {
+		return nil, ErrPartitionRequired
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Session
 	for _, s := range m.byID {
-		if s.Partition == partition && s.UserID == userID {
+		if s.Partition == partition && s.Subject == subject {
 			out = append(out, s.Clone())
 		}
 	}
