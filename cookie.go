@@ -305,6 +305,17 @@ func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, subject, 
 // be a LocalSessionStore, because the numeric id has no mesh-RPC equivalent — a thin gateway gets an
 // error. maxAgeSeconds<=0 defaults to 30 days.
 func (m *Manager) CreateAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
+	return m.createAppSession(ctx, subject, provider, browser, deviceType, platform, partition, maxAgeSeconds, false)
+}
+
+// CreateSecondFactorAppSession is CreateAppSession for a sign-in that completed a second factor: the
+// session is stored with SecondFactor set. Its caller is the login step that verified the second
+// factor, and its reader is an edge that admits only such a session.
+func (m *Manager) CreateSecondFactorAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
+	return m.createAppSession(ctx, subject, provider, browser, deviceType, platform, partition, maxAgeSeconds, true)
+}
+
+func (m *Manager) createAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int, secondFactor bool) (sessionKey string, sessionID int64, err error) {
 	local, ok := m.store.(LocalSessionStore)
 	if !ok {
 		return "", 0, errors.New("tessera: CreateAppSession requires a LocalSessionStore (auth node only)")
@@ -314,15 +325,16 @@ func (m *Manager) CreateAppSession(ctx context.Context, subject, provider, brows
 	}
 	now := m.now()
 	s := &Session{
-		Subject:    subject,
-		Provider:   provider,
-		Partition:  partition,
-		IssuedAt:   now,
-		LastUsedAt: now,
-		ExpiresAt:  m.expiry(maxAgeSeconds),
-		Browser:    browser,
-		DeviceType: deviceType,
-		Platform:   platform,
+		Subject:      subject,
+		Provider:     provider,
+		Partition:    partition,
+		IssuedAt:     now,
+		LastUsedAt:   now,
+		ExpiresAt:    m.expiry(maxAgeSeconds),
+		Browser:      browser,
+		DeviceType:   deviceType,
+		Platform:     platform,
+		SecondFactor: secondFactor,
 	}
 	return local.CreateWithID(ctx, s)
 }

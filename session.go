@@ -37,6 +37,11 @@ type Session struct {
 	AllowedApps      []string
 	AllowedProviders []string
 	RequireMFA       bool
+	// SecondFactor is true when the sign-in that minted the session completed a
+	// second factor in it. Only creation sets it (Manager.CreateSecondFactorAppSession);
+	// Touch and Rotate keep the row's value, so a session minted without one never
+	// gains it.
+	SecondFactor bool
 }
 
 // Clone returns a deep copy (slices copied) so a caller mutation cannot alias stored state.
