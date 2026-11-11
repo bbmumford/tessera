@@ -58,7 +58,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			allowed_apps TEXT NOT NULL DEFAULT '[]',
 			allowed_providers TEXT NOT NULL DEFAULT '[]',
 			require_mfa INTEGER NOT NULL DEFAULT 0,
-			second_factor INTEGER NOT NULL DEFAULT 0
+			second_factor INTEGER NOT NULL DEFAULT 0,
+			native INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_partition_subject ON tessera_sessions(partition, subject)`,
 		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_expires ON tessera_sessions(expires_at)`,
@@ -68,20 +69,31 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return s.addSecondFactorColumn(ctx)
+	for _, column := range markColumns {
+		if err := s.addMarkColumn(ctx, column); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// addSecondFactorColumn adds second_factor to a tessera_sessions table created
-// without it, so InitSchema leaves every table it ran over holding the columns
-// insert and sessionSelect name. A table holding the column is left as it is.
-// The probe is a SELECT rather than a catalog read because the store runs over
-// any database/sql driver, and each names its catalog differently.
-func (s *SQLStore) addSecondFactorColumn(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT second_factor FROM tessera_sessions LIMIT 0`)
+// markColumns are the creation marks a tessera_sessions table created before
+// them lacks: Session.SecondFactor and Session.Native. Each is an INTEGER
+// NOT NULL DEFAULT 0, so a row already there reads false.
+var markColumns = []string{"second_factor", "native"}
+
+// addMarkColumn adds column to a tessera_sessions table created without it, so
+// InitSchema leaves every table it ran over holding the columns insert and
+// sessionSelect name. A table holding the column is left as it is. The probe is
+// a SELECT rather than a catalog read because the store runs over any
+// database/sql driver, and each names its catalog differently. column is one of
+// markColumns, never caller input.
+func (s *SQLStore) addMarkColumn(ctx context.Context, column string) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+column+` FROM tessera_sessions LIMIT 0`)
 	if err == nil {
 		return rows.Close()
 	}
-	_, err = s.db.ExecContext(ctx, `ALTER TABLE tessera_sessions ADD COLUMN second_factor INTEGER NOT NULL DEFAULT 0`)
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE tessera_sessions ADD COLUMN `+column+` INTEGER NOT NULL DEFAULT 0`)
 	return err
 }
 
@@ -136,10 +148,10 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO tessera_sessions
-			(session_key, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(session_key, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key, cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
-		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor))
+		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor), boolToInt(cp.Native))
 	if err != nil {
 		return "", 0, err
 	}
@@ -159,16 +171,16 @@ func (s *SQLStore) CreateWithID(ctx context.Context, sess *Session) (string, int
 	return s.insert(ctx, sess)
 }
 
-const sessionSelect = `SELECT session_key, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor FROM tessera_sessions`
+const sessionSelect = `SELECT session_key, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native FROM tessera_sessions`
 
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var v Session
 	var issued, lastUsed int64
 	var expires sql.NullInt64
 	var apps, providers string
-	var mfa, secondFactor int64
+	var mfa, secondFactor, native int64
 	if err := sc.Scan(&v.ID, &v.Subject, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
-		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa, &secondFactor); err != nil {
+		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa, &secondFactor, &native); err != nil {
 		return nil, err
 	}
 	v.IssuedAt = time.Unix(issued, 0)
@@ -181,6 +193,7 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	v.AllowedProviders = unjsonStrings(providers)
 	v.RequireMFA = mfa != 0
 	v.SecondFactor = secondFactor != 0
+	v.Native = native != 0
 	return &v, nil
 }
 

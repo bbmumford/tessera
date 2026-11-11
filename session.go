@@ -42,6 +42,11 @@ type Session struct {
 	// Touch and Rotate keep the row's value, so a session minted without one never
 	// gains it.
 	SecondFactor bool
+	// Native is true when the session was minted for a native app at its sign-in code exchange
+	// (Manager.CreateNativeAppSession): the app holds its id inside a bearer token, not a browser
+	// cookie. Only creation sets it, and Touch and Rotate keep the row's value. An edge that admits
+	// only a browser session refuses one carrying it, whatever carried its id to the edge.
+	Native bool
 }
 
 // Clone returns a deep copy (slices copied) so a caller mutation cannot alias stored state.
