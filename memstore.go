@@ -21,11 +21,13 @@ type MemStore struct {
 	nextNum int64
 	now     func() time.Time
 	newID   func() string
+	// newHandle makes each public handle; randomHandle outside a test.
+	newHandle func() string
 }
 
 // NewMemStore builds an empty in-memory store.
 func NewMemStore() *MemStore {
-	return &MemStore{byID: map[string]*Session{}, now: time.Now, newID: randomID}
+	return &MemStore{byID: map[string]*Session{}, now: time.Now, newID: randomID, newHandle: randomHandle}
 }
 
 func randomID() string {
@@ -58,6 +60,7 @@ func (m *MemStore) create(s *Session) (string, int64, error) {
 	m.nextNum++
 	cp := s.Clone()
 	cp.ID = id
+	cp.Handle = m.newHandle()
 	if cp.IssuedAt.IsZero() {
 		cp.IssuedAt = m.now()
 	}
@@ -102,7 +105,7 @@ func (m *MemStore) Delete(_ context.Context, id string) error {
 }
 
 // Rotate re-keys a session under a fresh ID and drops the old key (session-fixation defense),
-// preserving the record. Returns the new ID.
+// preserving the record. The handle is replaced with the key. Returns the new ID.
 func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -112,10 +115,68 @@ func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	}
 	newID := m.newID()
 	s.ID = newID
+	s.Handle = m.newHandle()
 	s.LastUsedAt = m.now()
 	m.byID[newID] = s
 	delete(m.byID, id)
 	return newID, nil
+}
+
+// keyOfLocked returns the key of the session handle names. The caller holds m.mu. The scan is
+// over every session because this store is the reference and test backend, whose session count
+// is small; SQLStore answers the same lookup from its handle index.
+func (m *MemStore) keyOfLocked(handle string) (string, bool) {
+	if handle == "" {
+		return "", false
+	}
+	for id, s := range m.byID {
+		if s.Handle == handle {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// GetByHandle loads the session handle names.
+func (m *MemStore) GetByHandle(_ context.Context, handle string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, ok := m.keyOfLocked(handle)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return m.byID[id].Clone(), nil
+}
+
+// RotateByHandle re-keys the session handle names under a fresh key and a fresh handle, dropping
+// both old values, and returns the new handle.
+func (m *MemStore) RotateByHandle(_ context.Context, handle string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, ok := m.keyOfLocked(handle)
+	if !ok {
+		return "", ErrNotFound
+	}
+	s := m.byID[id]
+	newID := m.newID()
+	s.ID = newID
+	s.Handle = m.newHandle()
+	s.LastUsedAt = m.now()
+	m.byID[newID] = s
+	delete(m.byID, id)
+	return s.Handle, nil
+}
+
+// DeleteByHandle removes the session handle names.
+func (m *MemStore) DeleteByHandle(_ context.Context, handle string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, ok := m.keyOfLocked(handle)
+	if !ok {
+		return ErrNotFound
+	}
+	delete(m.byID, id)
+	return nil
 }
 
 // WipeSubject deletes every session for (partition, subject).

@@ -21,11 +21,13 @@ type SQLStore struct {
 	db    *sql.DB
 	now   func() time.Time
 	newID func() string
+	// newHandle makes each public handle; randomHandle outside a test.
+	newHandle func() string
 }
 
 // NewSQLStore builds a store over an opened *sql.DB. Call InitSchema once before use.
 func NewSQLStore(db *sql.DB) *SQLStore {
-	return &SQLStore{db: db, now: time.Now, newID: randomSessionKey}
+	return &SQLStore{db: db, now: time.Now, newID: randomSessionKey, newHandle: randomHandle}
 }
 
 var (
@@ -59,7 +61,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			allowed_providers TEXT NOT NULL DEFAULT '[]',
 			require_mfa INTEGER NOT NULL DEFAULT 0,
 			second_factor INTEGER NOT NULL DEFAULT 0,
-			native INTEGER NOT NULL DEFAULT 0
+			native INTEGER NOT NULL DEFAULT 0,
+			handle TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_partition_subject ON tessera_sessions(partition, subject)`,
 		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_expires ON tessera_sessions(expires_at)`,
@@ -74,7 +77,49 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.addHandles(ctx)
+}
+
+// addHandles leaves every tessera_sessions table InitSchema ran over holding a public handle on
+// every row and a unique index over them. A table created before the column gains it, and each row
+// without a handle is given one, so a session minted before handles existed is named by its token's
+// next refresh like any other. The column is nullable because SQLite adds no column with a UNIQUE
+// constraint; the index tesseraSessionsHandle holds the uniqueness instead, and every insert and
+// rotation writes a handle. The rows are read first and written after, so no row is updated while
+// its query is still open.
+func (s *SQLStore) addHandles(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT handle FROM tessera_sessions LIMIT 0`)
+	if err == nil {
+		err = rows.Close()
+	} else {
+		_, err = s.db.ExecContext(ctx, `ALTER TABLE tessera_sessions ADD COLUMN handle TEXT`)
+	}
+	if err != nil {
+		return err
+	}
+	rows, err = s.db.QueryContext(ctx, `SELECT id FROM tessera_sessions WHERE handle IS NULL OR handle = ''`)
+	if err != nil {
+		return err
+	}
+	var bare []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		bare = append(bare, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range bare {
+		if _, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET handle = ? WHERE id = ? AND (handle IS NULL OR handle = '')`, s.newHandle(), id); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS tesseraSessionsHandle ON tessera_sessions(handle)`)
+	return err
 }
 
 // markColumns are the creation marks a tessera_sessions table created before
@@ -148,9 +193,9 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO tessera_sessions
-			(session_key, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		key, cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
+			(session_key, handle, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key, s.newHandle(), cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
 		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor), boolToInt(cp.Native))
 	if err != nil {
 		return "", 0, err
@@ -171,7 +216,7 @@ func (s *SQLStore) CreateWithID(ctx context.Context, sess *Session) (string, int
 	return s.insert(ctx, sess)
 }
 
-const sessionSelect = `SELECT session_key, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native FROM tessera_sessions`
+const sessionSelect = `SELECT session_key, handle, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native FROM tessera_sessions`
 
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var v Session
@@ -179,7 +224,8 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var expires sql.NullInt64
 	var apps, providers string
 	var mfa, secondFactor, native int64
-	if err := sc.Scan(&v.ID, &v.Subject, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
+	var handle sql.NullString
+	if err := sc.Scan(&v.ID, &handle, &v.Subject, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
 		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa, &secondFactor, &native); err != nil {
 		return nil, err
 	}
@@ -194,6 +240,7 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	v.RequireMFA = mfa != 0
 	v.SecondFactor = secondFactor != 0
 	v.Native = native != 0
+	v.Handle = handle.String
 	return &v, nil
 }
 
@@ -237,10 +284,10 @@ func (s *SQLStore) Delete(ctx context.Context, id string) error {
 }
 
 // Rotate re-keys a session under a fresh key and drops the old key (session-fixation defense),
-// preserving the record. Returns the new key.
+// preserving the record. The handle is replaced with the key. Returns the new key.
 func (s *SQLStore) Rotate(ctx context.Context, id string) (string, error) {
 	newID := s.newID()
-	res, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET session_key = ?, last_used_at = ? WHERE session_key = ?`, newID, s.now().Unix(), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET session_key = ?, handle = ?, last_used_at = ? WHERE session_key = ?`, newID, s.newHandle(), s.now().Unix(), id)
 	if err != nil {
 		return "", err
 	}
@@ -248,6 +295,52 @@ func (s *SQLStore) Rotate(ctx context.Context, id string) (string, error) {
 		return "", ErrNotFound
 	}
 	return newID, nil
+}
+
+// GetByHandle loads the session handle names. An empty handle names none.
+func (s *SQLStore) GetByHandle(ctx context.Context, handle string) (*Session, error) {
+	if handle == "" {
+		return nil, ErrNotFound
+	}
+	v, err := scanSession(s.db.QueryRowContext(ctx, sessionSelect+` WHERE handle = ?`, handle))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return v, err
+}
+
+// RotateByHandle re-keys the session handle names under a fresh key and a fresh handle in one
+// statement, dropping both old values, and returns the new handle. The single UPDATE is what makes
+// a token refresh single use: of two refreshes presenting one handle, one updates the row and the
+// other finds no row to update.
+func (s *SQLStore) RotateByHandle(ctx context.Context, handle string) (string, error) {
+	if handle == "" {
+		return "", ErrNotFound
+	}
+	newHandle := s.newHandle()
+	res, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET session_key = ?, handle = ?, last_used_at = ? WHERE handle = ?`, s.newID(), newHandle, s.now().Unix(), handle)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound
+	}
+	return newHandle, nil
+}
+
+// DeleteByHandle removes the session handle names.
+func (s *SQLStore) DeleteByHandle(ctx context.Context, handle string) error {
+	if handle == "" {
+		return ErrNotFound
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE handle = ?`, handle)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // WipeSubject deletes every session for (partition, subject).

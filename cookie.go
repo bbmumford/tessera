@@ -420,6 +420,42 @@ func (m *Manager) LogoutAll(w http.ResponseWriter, r *http.Request, opts *Option
 }
 
 func (m *Manager) clearCookie(w http.ResponseWriter, name, domain string) {
+	ClearSessionCookie(w, name, domain)
+}
+
+// SetSessionCookie sets key as the session cookie name on domain, for a session
+// an authority minted where this process holds no store or Manager: Path "/",
+// HttpOnly, Secure and SameSite=Lax, expiring at expiresAt, or with the browser
+// session when expiresAt is nil. A key over MaxCookieValueBytes is refused and
+// nothing is written. domain is the configured cookie domain and is not checked
+// against a request's host, because the authority that minted the session
+// already chose it. Its consumer is library authgw's SetSessionCookie, which
+// every login surface and handoff route sets a minted session through.
+func SetSessionCookie(w http.ResponseWriter, name, domain, key string, expiresAt *time.Time) error {
+	if err := enforceCookieSize(key); err != nil {
+		return err
+	}
+	c := &http.Cookie{
+		Name:     name,
+		Value:    key,
+		Path:     "/",
+		Domain:   domain,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if expiresAt != nil {
+		c.Expires = *expiresAt
+	}
+	http.SetCookie(w, c)
+	return nil
+}
+
+// ClearSessionCookie expires the session cookie name on domain with the
+// attributes SetSessionCookie sets it with, so a browser drops the one it holds.
+// Its consumers are the Manager's logouts and library authgw's
+// ClearSessionCookie, which a login surface's sign-out calls.
+func ClearSessionCookie(w http.ResponseWriter, name, domain string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
@@ -459,4 +495,11 @@ func (m *Manager) GetSubjectSessions(ctx context.Context, subject string) ([]*Se
 // DeleteSession deletes a session by id.
 func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	return m.store.Delete(ctx, id)
+}
+
+// GetSessionByHandle loads the session its public handle names. Its consumers are the operations
+// that name a session by the handle a signed token or a proved caller's identity carries
+// (domain/authhost's ResolveSession and DeleteSession), never a cookie reader.
+func (m *Manager) GetSessionByHandle(ctx context.Context, handle string) (*Session, error) {
+	return m.store.GetByHandle(ctx, handle)
 }

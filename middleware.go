@@ -17,7 +17,8 @@ func SessionCtxKey() ctxKey { return sessionCtxKey }
 
 // AttachSession validates the request's session cookie and, when it names a live unexpired session,
 // attaches that session to the request context and soft-touches its LastUsedAt (without extending
-// expiry). A missing/invalid cookie, an unknown session, or an expired one all fall through to next
+// expiry). A missing/invalid cookie, an unknown session, an expired one, or one minted for a native
+// app all fall through to next
 // with no session attached — never an error to the client. Diagnostic detail goes to the Manager's
 // optional Logf.
 func (m *Manager) AttachSession(next http.Handler) http.Handler {
@@ -36,6 +37,13 @@ func (m *Manager) AttachSession(next http.Handler) http.Handler {
 		}
 		if sess.ExpiresAt != nil && sess.ExpiresAt.Before(m.now()) {
 			m.logf("attach: expired path=%s subject=%q", r.URL.Path, sess.Subject)
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A session minted for a native app proves only by the signed token its app holds, never
+		// by a cookie, so a cookie carrying its key attaches nothing.
+		if sess.Native {
+			m.logf("attach: native session by cookie path=%s", r.URL.Path)
 			next.ServeHTTP(w, r)
 			return
 		}

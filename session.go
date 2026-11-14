@@ -10,6 +10,8 @@ package tessera
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 )
@@ -22,8 +24,16 @@ var ErrPartitionRequired = errors.New("tessera: partition is required")
 // Session is the neutral session record. Subject is the authenticated principal's subject and
 // Partition the partition the session was minted in; the store keys on both and interprets neither.
 // ExpiresAt is a pointer: nil means MaxAge/rolling semantics (no fixed expiry).
+//
+// ID is the session key: the secret a browser's cookie carries, which proves the session by
+// itself. Handle is the session's public handle: a second value, not secret, which a signed token
+// carries as its sid and which every record a session is named in outside the store holds. A
+// handle proves nothing alone; it selects the record for a caller a token already proved. The
+// store sets it at creation, ignoring any value the caller supplies, and replaces it together with
+// the key at every rotation, so nothing that named the old session names the new one.
 type Session struct {
 	ID               string
+	Handle           string
 	Subject          string
 	Partition        string // required: Create refuses an empty one
 	AudienceRoot     string // eTLD+1 for app-local sessions; empty for central
@@ -70,6 +80,11 @@ func (s *Session) Clone() *Session {
 // Create, WipeSubject and ListSubjectSessions return ErrPartitionRequired for an empty partition
 // before touching any row; Get, Touch, Delete and Rotate select by session key alone, because the
 // key is the bearer secret the cookie carries.
+//
+// GetByHandle, RotateByHandle and DeleteByHandle select by the session's public handle instead:
+// the session check, rotation and revoke of a caller a signed token proved, whose token names the
+// session by its handle and never by its key. Rotate and RotateByHandle both replace the key and
+// the handle; RotateByHandle returns the new handle. An unknown handle is ErrNotFound.
 type SessionStore interface {
 	Create(ctx context.Context, s *Session) (id string, err error)
 	Get(ctx context.Context, id string) (*Session, error)
@@ -78,6 +93,21 @@ type SessionStore interface {
 	Rotate(ctx context.Context, id string) (newID string, err error)
 	WipeSubject(ctx context.Context, partition, subject string) (int64, error)
 	ListSubjectSessions(ctx context.Context, partition, subject string) ([]*Session, error)
+	GetByHandle(ctx context.Context, handle string) (*Session, error)
+	RotateByHandle(ctx context.Context, handle string) (newHandle string, err error)
+	DeleteByHandle(ctx context.Context, handle string) error
+}
+
+// handlePrefix begins every handle, so a handle read in a log or a record is never taken for a
+// session key, which is hex alone.
+const handlePrefix = "sess_"
+
+// randomHandle is a fresh public handle: handlePrefix and 16 random bytes in hex. It is random
+// rather than a counter so a handle says nothing about how many sessions exist or when one began.
+func randomHandle() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return handlePrefix + hex.EncodeToString(b)
 }
 
 // LocalSessionStore extends SessionStore with auth-node-only operations that need a numeric DB id

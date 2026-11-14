@@ -211,5 +211,52 @@ func (c *CachingStore) ListSubjectSessions(ctx context.Context, partition, subje
 	return c.inner.ListSubjectSessions(ctx, partition, subject)
 }
 
+// GetByHandle passes through uncached. A handle lookup is the session check of a caller a signed
+// token proved, which must see a revocation made elsewhere on its next request; and the cache
+// indexes by session key alone.
+func (c *CachingStore) GetByHandle(ctx context.Context, handle string) (*Session, error) {
+	if c == nil || c.inner == nil {
+		return nil, ErrNoStore
+	}
+	return c.inner.GetByHandle(ctx, handle)
+}
+
+// RotateByHandle writes through and evicts the entry of the session handle names, whose key the
+// rotation dropped.
+func (c *CachingStore) RotateByHandle(ctx context.Context, handle string) (string, error) {
+	if c == nil || c.inner == nil {
+		return "", ErrNoStore
+	}
+	newHandle, err := c.inner.RotateByHandle(ctx, handle)
+	c.evictHandle(handle)
+	return newHandle, err
+}
+
+// DeleteByHandle writes through and evicts the entry of the session handle names, whether or not
+// the delete succeeded, as Delete does.
+func (c *CachingStore) DeleteByHandle(ctx context.Context, handle string) error {
+	if c == nil || c.inner == nil {
+		return ErrNoStore
+	}
+	err := c.inner.DeleteByHandle(ctx, handle)
+	c.evictHandle(handle)
+	return err
+}
+
+// evictHandle drops every entry whose session carries handle. The cache is keyed by session key,
+// so the entries are scanned; sweepLocked bounds how many there are.
+func (c *CachingStore) evictHandle(handle string) {
+	if handle == "" {
+		return
+	}
+	c.mu.Lock()
+	for k, e := range c.cache {
+		if e.session.Handle == handle {
+			delete(c.cache, k)
+		}
+	}
+	c.mu.Unlock()
+}
+
 // CachingStore is a SessionStore.
 var _ SessionStore = (*CachingStore)(nil)

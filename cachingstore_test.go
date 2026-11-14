@@ -34,6 +34,17 @@ func (c *countingStore) Get(_ context.Context, _ string) (*Session, error) {
 func (c *countingStore) Touch(context.Context, string, *time.Time) error { return nil }
 func (c *countingStore) Delete(context.Context, string) error            { return c.delErr }
 func (c *countingStore) Rotate(context.Context, string) (string, error)  { return "rotated", nil }
+func (c *countingStore) GetByHandle(_ context.Context, _ string) (*Session, error) {
+	c.getCalls++
+	if c.getErr != nil {
+		return nil, c.getErr
+	}
+	return c.sess.Clone(), nil
+}
+func (c *countingStore) RotateByHandle(context.Context, string) (string, error) {
+	return "sess_rotated", nil
+}
+func (c *countingStore) DeleteByHandle(context.Context, string) error { return c.delErr }
 func (c *countingStore) WipeSubject(context.Context, string, string) (int64, error) {
 	c.wipeCalls++
 	return c.wiped, nil
