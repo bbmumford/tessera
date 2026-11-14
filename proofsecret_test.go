@@ -56,30 +56,30 @@ func TestInitSchemaGivesEveryOlderRowAProofSecret(t *testing.T) {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.ExecContext(ctx, `CREATE TABLE tessera_sessions (
+	if _, err := db.ExecContext(ctx, `CREATE TABLE tesseraSessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		session_key TEXT UNIQUE NOT NULL,
+		sessionKey TEXT UNIQUE NOT NULL,
 		subject TEXT NOT NULL,
 		partition TEXT NOT NULL CHECK (partition <> ''),
-		audience_root TEXT NOT NULL DEFAULT '',
+		audienceRoot TEXT NOT NULL DEFAULT '',
 		provider TEXT NOT NULL DEFAULT '',
-		issued_at INTEGER NOT NULL DEFAULT 0,
-		expires_at INTEGER,
-		last_used_at INTEGER NOT NULL DEFAULT 0,
+		issuedAt INTEGER NOT NULL DEFAULT 0,
+		expiresAt INTEGER,
+		lastUsedAt INTEGER NOT NULL DEFAULT 0,
 		browser TEXT NOT NULL DEFAULT '',
-		device_type TEXT NOT NULL DEFAULT '',
+		deviceType TEXT NOT NULL DEFAULT '',
 		platform TEXT NOT NULL DEFAULT '',
-		allowed_apps TEXT NOT NULL DEFAULT '[]',
-		allowed_providers TEXT NOT NULL DEFAULT '[]',
-		require_mfa INTEGER NOT NULL DEFAULT 0,
-		second_factor INTEGER NOT NULL DEFAULT 0,
+		allowedApps TEXT NOT NULL DEFAULT '[]',
+		allowedProviders TEXT NOT NULL DEFAULT '[]',
+		requireMfa INTEGER NOT NULL DEFAULT 0,
+		secondFactor INTEGER NOT NULL DEFAULT 0,
 		native INTEGER NOT NULL DEFAULT 0,
 		handle TEXT
 	)`); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"k-one", "k-two"} {
-		if _, err := db.ExecContext(ctx, `INSERT INTO tessera_sessions (session_key, subject, partition) VALUES (?, 'u1', 'acme')`, k); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO tesseraSessions (sessionKey, subject, partition) VALUES (?, 'u1', 'acme')`, k); err != nil {
 			t.Fatal(err)
 		}
 	}

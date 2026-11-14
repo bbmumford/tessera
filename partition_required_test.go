@@ -50,13 +50,13 @@ func TestEveryStoreRefusesAnEmptyPartition(t *testing.T) {
 // a row written by anything other than SQLStore still cannot be unpartitioned.
 func TestSQLStore_SchemaRefusesAnEmptyPartition(t *testing.T) {
 	s := newSQLStore(t, time.Unix(1000, 0))
-	if _, err := s.db.Exec(`INSERT INTO tessera_sessions (session_key, subject, partition) VALUES ('k1', 'u1', 'acme')`); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO tesseraSessions (sessionKey, subject, partition) VALUES ('k1', 'u1', 'acme')`); err != nil {
 		t.Fatalf("a partitioned row must insert: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO tessera_sessions (session_key, subject, partition) VALUES ('k2', 'u1', '')`); err == nil {
+	if _, err := s.db.Exec(`INSERT INTO tesseraSessions (sessionKey, subject, partition) VALUES ('k2', 'u1', '')`); err == nil {
 		t.Fatal("the table accepted an empty partition")
 	}
-	if _, err := s.db.Exec(`INSERT INTO tessera_sessions (session_key, subject) VALUES ('k3', 'u1')`); err == nil {
+	if _, err := s.db.Exec(`INSERT INTO tesseraSessions (sessionKey, subject) VALUES ('k3', 'u1')`); err == nil {
 		t.Fatal("the table accepted a row with no partition")
 	}
 }

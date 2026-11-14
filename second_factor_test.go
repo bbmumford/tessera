@@ -55,7 +55,7 @@ func TestSecondFactorIsStoredAtCreationAndKeptByRotate(t *testing.T) {
 	}
 }
 
-// InitSchema over a tessera_sessions table created without second_factor adds
+// InitSchema over a tesseraSessions table created without secondFactor adds
 // the column, rows already there read as minted without a second factor, and a
 // second InitSchema leaves the table as it is.
 func TestInitSchemaAddsSecondFactorToAnOlderTable(t *testing.T) {
@@ -66,26 +66,26 @@ func TestInitSchemaAddsSecondFactorToAnOlderTable(t *testing.T) {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.ExecContext(ctx, `CREATE TABLE tessera_sessions (
+	if _, err := db.ExecContext(ctx, `CREATE TABLE tesseraSessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		session_key TEXT UNIQUE NOT NULL,
+		sessionKey TEXT UNIQUE NOT NULL,
 		subject TEXT NOT NULL,
 		partition TEXT NOT NULL CHECK (partition <> ''),
-		audience_root TEXT NOT NULL DEFAULT '',
+		audienceRoot TEXT NOT NULL DEFAULT '',
 		provider TEXT NOT NULL DEFAULT '',
-		issued_at INTEGER NOT NULL DEFAULT 0,
-		expires_at INTEGER,
-		last_used_at INTEGER NOT NULL DEFAULT 0,
+		issuedAt INTEGER NOT NULL DEFAULT 0,
+		expiresAt INTEGER,
+		lastUsedAt INTEGER NOT NULL DEFAULT 0,
 		browser TEXT NOT NULL DEFAULT '',
-		device_type TEXT NOT NULL DEFAULT '',
+		deviceType TEXT NOT NULL DEFAULT '',
 		platform TEXT NOT NULL DEFAULT '',
-		allowed_apps TEXT NOT NULL DEFAULT '[]',
-		allowed_providers TEXT NOT NULL DEFAULT '[]',
-		require_mfa INTEGER NOT NULL DEFAULT 0
+		allowedApps TEXT NOT NULL DEFAULT '[]',
+		allowedProviders TEXT NOT NULL DEFAULT '[]',
+		requireMfa INTEGER NOT NULL DEFAULT 0
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO tessera_sessions (session_key, subject, partition) VALUES ('k-old', 'u1', 'acme')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO tesseraSessions (sessionKey, subject, partition) VALUES ('k-old', 'u1', 'acme')`); err != nil {
 		t.Fatal(err)
 	}
 	s := NewSQLStore(db)

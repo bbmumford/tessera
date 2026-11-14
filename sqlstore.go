@@ -44,29 +44,29 @@ func randomSessionKey() string {
 // InitSchema creates the sessions table + indexes (idempotent); run once at boot before use.
 func (s *SQLStore) InitSchema(ctx context.Context) error {
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS tessera_sessions (
+		`CREATE TABLE IF NOT EXISTS tesseraSessions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_key TEXT UNIQUE NOT NULL,
+			sessionKey TEXT UNIQUE NOT NULL,
 			subject TEXT NOT NULL,
 			partition TEXT NOT NULL CHECK (partition <> ''),
-			audience_root TEXT NOT NULL DEFAULT '',
+			audienceRoot TEXT NOT NULL DEFAULT '',
 			provider TEXT NOT NULL DEFAULT '',
-			issued_at INTEGER NOT NULL DEFAULT 0,
-			expires_at INTEGER,
-			last_used_at INTEGER NOT NULL DEFAULT 0,
+			issuedAt INTEGER NOT NULL DEFAULT 0,
+			expiresAt INTEGER,
+			lastUsedAt INTEGER NOT NULL DEFAULT 0,
 			browser TEXT NOT NULL DEFAULT '',
-			device_type TEXT NOT NULL DEFAULT '',
+			deviceType TEXT NOT NULL DEFAULT '',
 			platform TEXT NOT NULL DEFAULT '',
-			allowed_apps TEXT NOT NULL DEFAULT '[]',
-			allowed_providers TEXT NOT NULL DEFAULT '[]',
-			require_mfa INTEGER NOT NULL DEFAULT 0,
-			second_factor INTEGER NOT NULL DEFAULT 0,
+			allowedApps TEXT NOT NULL DEFAULT '[]',
+			allowedProviders TEXT NOT NULL DEFAULT '[]',
+			requireMfa INTEGER NOT NULL DEFAULT 0,
+			secondFactor INTEGER NOT NULL DEFAULT 0,
 			native INTEGER NOT NULL DEFAULT 0,
 			handle TEXT,
 			proofSecret TEXT NOT NULL DEFAULT ''
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_partition_subject ON tessera_sessions(partition, subject)`,
-		`CREATE INDEX IF NOT EXISTS idx_tessera_sessions_expires ON tessera_sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idxTesseraSessionsPartitionSubject ON tesseraSessions(partition, subject)`,
+		`CREATE INDEX IF NOT EXISTS idxTesseraSessionsExpires ON tesseraSessions(expiresAt)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -84,7 +84,7 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 	return s.addProofSecrets(ctx)
 }
 
-// addHandles leaves every tessera_sessions table InitSchema ran over holding a public handle on
+// addHandles leaves every tesseraSessions table InitSchema ran over holding a public handle on
 // every row and a unique index over them. A table created before the column gains it, and each row
 // without a handle is given one, so a session minted before handles existed is named by its token's
 // next refresh like any other. The column is nullable because SQLite adds no column with a UNIQUE
@@ -92,16 +92,16 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 // rotation writes a handle. The rows are read first and written after, so no row is updated while
 // its query is still open.
 func (s *SQLStore) addHandles(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT handle FROM tessera_sessions LIMIT 0`)
+	rows, err := s.db.QueryContext(ctx, `SELECT handle FROM tesseraSessions LIMIT 0`)
 	if err == nil {
 		err = rows.Close()
 	} else {
-		_, err = s.db.ExecContext(ctx, `ALTER TABLE tessera_sessions ADD COLUMN handle TEXT`)
+		_, err = s.db.ExecContext(ctx, `ALTER TABLE tesseraSessions ADD COLUMN handle TEXT`)
 	}
 	if err != nil {
 		return err
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT id FROM tessera_sessions WHERE handle IS NULL OR handle = ''`)
+	rows, err = s.db.QueryContext(ctx, `SELECT id FROM tesseraSessions WHERE handle IS NULL OR handle = ''`)
 	if err != nil {
 		return err
 	}
@@ -118,30 +118,30 @@ func (s *SQLStore) addHandles(ctx context.Context) error {
 		return err
 	}
 	for _, id := range bare {
-		if _, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET handle = ? WHERE id = ? AND (handle IS NULL OR handle = '')`, s.newHandle(), id); err != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET handle = ? WHERE id = ? AND (handle IS NULL OR handle = '')`, s.newHandle(), id); err != nil {
 			return err
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS tesseraSessionsHandle ON tessera_sessions(handle)`)
+	_, err = s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS tesseraSessionsHandle ON tesseraSessions(handle)`)
 	return err
 }
 
-// addProofSecrets leaves every tessera_sessions table InitSchema ran over holding a proof secret
+// addProofSecrets leaves every tesseraSessions table InitSchema ran over holding a proof secret
 // (Session.ProofSecret) on every row: a table created before the column gains it, and each row
 // whose secret is empty is given a fresh one, so a session minted before secrets existed can prove
 // a change from its next page load without signing in again. The rows are read first and written
 // after, so no row is updated while its query is still open.
 func (s *SQLStore) addProofSecrets(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT proofSecret FROM tessera_sessions LIMIT 0`)
+	rows, err := s.db.QueryContext(ctx, `SELECT proofSecret FROM tesseraSessions LIMIT 0`)
 	if err == nil {
 		err = rows.Close()
 	} else {
-		_, err = s.db.ExecContext(ctx, `ALTER TABLE tessera_sessions ADD COLUMN proofSecret TEXT NOT NULL DEFAULT ''`)
+		_, err = s.db.ExecContext(ctx, `ALTER TABLE tesseraSessions ADD COLUMN proofSecret TEXT NOT NULL DEFAULT ''`)
 	}
 	if err != nil {
 		return err
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT id FROM tessera_sessions WHERE proofSecret = ''`)
+	rows, err = s.db.QueryContext(ctx, `SELECT id FROM tesseraSessions WHERE proofSecret = ''`)
 	if err != nil {
 		return err
 	}
@@ -158,30 +158,30 @@ func (s *SQLStore) addProofSecrets(ctx context.Context) error {
 		return err
 	}
 	for _, id := range bare {
-		if _, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET proofSecret = ? WHERE id = ? AND proofSecret = ''`, randomProofSecret(), id); err != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET proofSecret = ? WHERE id = ? AND proofSecret = ''`, randomProofSecret(), id); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// markColumns are the creation marks a tessera_sessions table created before
+// markColumns are the creation marks a tesseraSessions table created before
 // them lacks: Session.SecondFactor and Session.Native. Each is an INTEGER
 // NOT NULL DEFAULT 0, so a row already there reads false.
-var markColumns = []string{"second_factor", "native"}
+var markColumns = []string{"secondFactor", "native"}
 
-// addMarkColumn adds column to a tessera_sessions table created without it, so
+// addMarkColumn adds column to a tesseraSessions table created without it, so
 // InitSchema leaves every table it ran over holding the columns insert and
 // sessionSelect name. A table holding the column is left as it is. The probe is
 // a SELECT rather than a catalog read because the store runs over any
 // database/sql driver, and each names its catalog differently. column is one of
 // markColumns, never caller input.
 func (s *SQLStore) addMarkColumn(ctx context.Context, column string) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+column+` FROM tessera_sessions LIMIT 0`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+column+` FROM tesseraSessions LIMIT 0`)
 	if err == nil {
 		return rows.Close()
 	}
-	_, err = s.db.ExecContext(ctx, `ALTER TABLE tessera_sessions ADD COLUMN `+column+` INTEGER NOT NULL DEFAULT 0`)
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE tesseraSessions ADD COLUMN `+column+` INTEGER NOT NULL DEFAULT 0`)
 	return err
 }
 
@@ -235,8 +235,8 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 		cp.LastUsedAt = cp.IssuedAt
 	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO tessera_sessions
-			(session_key, handle, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native, proofSecret)
+		INSERT INTO tesseraSessions
+			(sessionKey, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key, s.newHandle(), cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
 		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor), boolToInt(cp.Native), randomProofSecret())
@@ -259,7 +259,7 @@ func (s *SQLStore) CreateWithID(ctx context.Context, sess *Session) (string, int
 	return s.insert(ctx, sess)
 }
 
-const sessionSelect = `SELECT session_key, handle, subject, partition, audience_root, provider, issued_at, expires_at, last_used_at, browser, device_type, platform, allowed_apps, allowed_providers, require_mfa, second_factor, native, proofSecret FROM tessera_sessions`
+const sessionSelect = `SELECT sessionKey, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret FROM tesseraSessions`
 
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var v Session
@@ -289,21 +289,21 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 
 // Get loads a session by key.
 func (s *SQLStore) Get(ctx context.Context, id string) (*Session, error) {
-	v, err := scanSession(s.db.QueryRowContext(ctx, sessionSelect+` WHERE session_key = ?`, id))
+	v, err := scanSession(s.db.QueryRowContext(ctx, sessionSelect+` WHERE sessionKey = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return v, err
 }
 
-// Touch refreshes last_used_at and, when newExpiry is non-nil, the expiry.
+// Touch refreshes lastUsedAt and, when newExpiry is non-nil, the expiry.
 func (s *SQLStore) Touch(ctx context.Context, id string, newExpiry *time.Time) error {
 	var res sql.Result
 	var err error
 	if newExpiry != nil {
-		res, err = s.db.ExecContext(ctx, `UPDATE tessera_sessions SET last_used_at = ?, expires_at = ? WHERE session_key = ?`, s.now().Unix(), newExpiry.Unix(), id)
+		res, err = s.db.ExecContext(ctx, `UPDATE tesseraSessions SET lastUsedAt = ?, expiresAt = ? WHERE sessionKey = ?`, s.now().Unix(), newExpiry.Unix(), id)
 	} else {
-		res, err = s.db.ExecContext(ctx, `UPDATE tessera_sessions SET last_used_at = ? WHERE session_key = ?`, s.now().Unix(), id)
+		res, err = s.db.ExecContext(ctx, `UPDATE tesseraSessions SET lastUsedAt = ? WHERE sessionKey = ?`, s.now().Unix(), id)
 	}
 	if err != nil {
 		return err
@@ -316,7 +316,7 @@ func (s *SQLStore) Touch(ctx context.Context, id string, newExpiry *time.Time) e
 
 // Delete removes a session by key.
 func (s *SQLStore) Delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE session_key = ?`, id)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tesseraSessions WHERE sessionKey = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func (s *SQLStore) Delete(ctx context.Context, id string) error {
 // new key.
 func (s *SQLStore) Rotate(ctx context.Context, id string) (string, error) {
 	newID := s.newID()
-	res, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET session_key = ?, handle = ?, proofSecret = ?, last_used_at = ? WHERE session_key = ?`, newID, s.newHandle(), randomProofSecret(), s.now().Unix(), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKey = ?, handle = ?, proofSecret = ?, lastUsedAt = ? WHERE sessionKey = ?`, newID, s.newHandle(), randomProofSecret(), s.now().Unix(), id)
 	if err != nil {
 		return "", err
 	}
@@ -362,7 +362,7 @@ func (s *SQLStore) RotateByHandle(ctx context.Context, handle string) (string, e
 		return "", ErrNotFound
 	}
 	newHandle := s.newHandle()
-	res, err := s.db.ExecContext(ctx, `UPDATE tessera_sessions SET session_key = ?, handle = ?, proofSecret = ?, last_used_at = ? WHERE handle = ?`, s.newID(), newHandle, randomProofSecret(), s.now().Unix(), handle)
+	res, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKey = ?, handle = ?, proofSecret = ?, lastUsedAt = ? WHERE handle = ?`, s.newID(), newHandle, randomProofSecret(), s.now().Unix(), handle)
 	if err != nil {
 		return "", err
 	}
@@ -377,7 +377,7 @@ func (s *SQLStore) DeleteByHandle(ctx context.Context, handle string) error {
 	if handle == "" {
 		return ErrNotFound
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE handle = ?`, handle)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tesseraSessions WHERE handle = ?`, handle)
 	if err != nil {
 		return err
 	}
@@ -392,7 +392,7 @@ func (s *SQLStore) WipeSubject(ctx context.Context, partition, subject string) (
 	if partition == "" {
 		return 0, ErrPartitionRequired
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE partition = ? AND subject = ?`, partition, subject)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tesseraSessions WHERE partition = ? AND subject = ?`, partition, subject)
 	if err != nil {
 		return 0, err
 	}
@@ -405,7 +405,7 @@ func (s *SQLStore) ListSubjectSessions(ctx context.Context, partition, subject s
 	if partition == "" {
 		return nil, ErrPartitionRequired
 	}
-	rows, err := s.db.QueryContext(ctx, sessionSelect+` WHERE partition = ? AND subject = ? AND (expires_at IS NULL OR expires_at > ?)`, partition, subject, s.now().Unix())
+	rows, err := s.db.QueryContext(ctx, sessionSelect+` WHERE partition = ? AND subject = ? AND (expiresAt IS NULL OR expiresAt > ?)`, partition, subject, s.now().Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -421,10 +421,10 @@ func (s *SQLStore) ListSubjectSessions(ctx context.Context, partition, subject s
 	return out, rows.Err()
 }
 
-// PurgeExpired deletes sessions whose expires_at is before the given instant (a NULL expiry is
+// PurgeExpired deletes sessions whose expiresAt is before the given instant (a NULL expiry is
 // MaxAge/rolling and never purged).
 func (s *SQLStore) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tessera_sessions WHERE expires_at IS NOT NULL AND expires_at < ?`, before.Unix())
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tesseraSessions WHERE expiresAt IS NOT NULL AND expiresAt < ?`, before.Unix())
 	if err != nil {
 		return 0, err
 	}
