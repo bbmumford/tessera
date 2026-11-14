@@ -497,6 +497,15 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	return m.store.Delete(ctx, id)
 }
 
+// WipeSubject deletes every session of subject in the request's partition, the set
+// GetSubjectSessions lists, in one store call, and returns how many it deleted. Its
+// consumer is a session host ending a proved caller's sessions with no response to write
+// (library domain/authhost DeleteAllSessions); LogoutAll is the same wipe for a browser
+// request, clearing its cookie too.
+func (m *Manager) WipeSubject(ctx context.Context, subject string) (int64, error) {
+	return m.store.WipeSubject(ctx, m.partition(ctx), subject)
+}
+
 // GetSessionByHandle loads the session its public handle names. Its consumers are the operations
 // that name a session by the handle a signed token or a proved caller's identity carries
 // (domain/authhost's ResolveSession and DeleteSession), never a cookie reader.
