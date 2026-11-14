@@ -11,6 +11,7 @@ package tessera
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"time"
@@ -57,6 +58,13 @@ type Session struct {
 	// cookie. Only creation sets it, and Touch and Rotate keep the row's value. An edge that admits
 	// only a browser session refuses one carrying it, whatever carried its id to the edge.
 	Native bool
+	// ProofSecret keys the anti-CSRF proof a cookie-authenticated change carries (library
+	// security/requestproof): the page the platform serves holds it and MACs each change with it,
+	// and library httpscope RequireRequestProof verifies that MAC against this value. The store sets
+	// it at creation, ignoring any value the caller supplies, and replaces it with the key at every
+	// rotation, so a page holding the old session's secret proves nothing for the new one. It is
+	// never a credential alone: a proof is checked only on a request the session's cookie proved.
+	ProofSecret string
 }
 
 // Clone returns a deep copy (slices copied) so a caller mutation cannot alias stored state.
@@ -108,6 +116,14 @@ func randomHandle() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return handlePrefix + hex.EncodeToString(b)
+}
+
+// randomProofSecret is a fresh proof secret: 32 random bytes in unpadded base64url, the form a
+// page imports as an HMAC key from its UTF-8 bytes.
+func randomProofSecret() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // LocalSessionStore extends SessionStore with auth-node-only operations that need a numeric DB id

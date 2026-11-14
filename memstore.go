@@ -61,6 +61,7 @@ func (m *MemStore) create(s *Session) (string, int64, error) {
 	cp := s.Clone()
 	cp.ID = id
 	cp.Handle = m.newHandle()
+	cp.ProofSecret = randomProofSecret()
 	if cp.IssuedAt.IsZero() {
 		cp.IssuedAt = m.now()
 	}
@@ -116,6 +117,7 @@ func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	newID := m.newID()
 	s.ID = newID
 	s.Handle = m.newHandle()
+	s.ProofSecret = randomProofSecret()
 	s.LastUsedAt = m.now()
 	m.byID[newID] = s
 	delete(m.byID, id)
@@ -161,6 +163,7 @@ func (m *MemStore) RotateByHandle(_ context.Context, handle string) (string, err
 	newID := m.newID()
 	s.ID = newID
 	s.Handle = m.newHandle()
+	s.ProofSecret = randomProofSecret()
 	s.LastUsedAt = m.now()
 	m.byID[newID] = s
 	delete(m.byID, id)
