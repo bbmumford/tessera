@@ -512,3 +512,10 @@ func (m *Manager) WipeSubject(ctx context.Context, subject string) (int64, error
 func (m *Manager) GetSessionByHandle(ctx context.Context, handle string) (*Session, error) {
 	return m.store.GetByHandle(ctx, handle)
 }
+
+// DeleteSessionByHandle deletes the session its public handle names; an unknown handle is
+// ErrNotFound. Its consumer is domain/authhost's DeleteSession, whose target is the handle the
+// session list answers and a proved caller's identity seals, never a cookie's key.
+func (m *Manager) DeleteSessionByHandle(ctx context.Context, handle string) error {
+	return m.store.DeleteByHandle(ctx, handle)
+}
