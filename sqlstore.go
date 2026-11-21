@@ -16,7 +16,8 @@ import (
 // field. Partition and subject are plain columns the store never interprets; WipeSubject and
 // ListSubjectSessions select on the pair. The SessionStore interface admits a mesh-gateway or
 // in-memory (MemStore) backend instead. Times are Unix seconds; a nil ExpiresAt is stored NULL
-// (MaxAge/rolling).
+// (MaxAge/rolling). A row holds its session key's digest (sessionKeyDigest), never the key, and
+// every lookup by key selects on the digest.
 type SQLStore struct {
 	db    *sql.DB
 	now   func() time.Time
@@ -46,7 +47,7 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS tesseraSessions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			sessionKey TEXT UNIQUE NOT NULL,
+			sessionKeyDigest TEXT UNIQUE NOT NULL,
 			subject TEXT NOT NULL,
 			partition TEXT NOT NULL CHECK (partition <> ''),
 			audienceRoot TEXT NOT NULL DEFAULT '',
@@ -73,6 +74,9 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.digestSessionKeys(ctx); err != nil {
+		return err
+	}
 	for _, column := range markColumns {
 		if err := s.addMarkColumn(ctx, column); err != nil {
 			return err
@@ -82,6 +86,58 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 		return err
 	}
 	return s.addProofSecrets(ctx)
+}
+
+// digestSessionKeys leaves every tesseraSessions table InitSchema ran over keeping session-key
+// digests alone. A table whose key column is sessionKey holds each key itself: in one transaction
+// that column is renamed sessionKeyDigest and each row's key is replaced by its digest, so every
+// session stays valid under the cookie that carries its key and no key is left in the table. A
+// table holding sessionKeyDigest is left as it is; one holding neither column fails the rename, and
+// InitSchema returns that error. The rows are read first and written after, so no row is updated
+// while its query is still open.
+func (s *SQLStore) digestSessionKeys(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT sessionKeyDigest FROM tesseraSessions LIMIT 0`)
+	if err == nil {
+		return rows.Close()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE tesseraSessions RENAME COLUMN sessionKey TO sessionKeyDigest`); err != nil {
+		return err
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT id, sessionKeyDigest FROM tesseraSessions`)
+	if err != nil {
+		return err
+	}
+	type keyedRow struct {
+		id  int64
+		key string
+	}
+	var keyed []keyedRow
+	for rows.Next() {
+		var r keyedRow
+		if err := rows.Scan(&r.id, &r.key); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		keyed = append(keyed, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, r := range keyed {
+		if _, err := tx.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKeyDigest = ? WHERE id = ?`, sessionKeyDigest(r.key), r.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // addHandles leaves every tesseraSessions table InitSchema ran over holding a public handle on
@@ -236,9 +292,9 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO tesseraSessions
-			(sessionKey, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret)
+			(sessionKeyDigest, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		key, s.newHandle(), cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
+		sessionKeyDigest(key), s.newHandle(), cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
 		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor), boolToInt(cp.Native), randomProofSecret())
 	if err != nil {
 		return "", 0, err
@@ -259,7 +315,9 @@ func (s *SQLStore) CreateWithID(ctx context.Context, sess *Session) (string, int
 	return s.insert(ctx, sess)
 }
 
-const sessionSelect = `SELECT sessionKey, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret FROM tesseraSessions`
+// sessionSelect reads every Session field a row holds. A row holds no session key, so a session it
+// scans has an empty ID until Get sets the key it was asked for.
+const sessionSelect = `SELECT handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret FROM tesseraSessions`
 
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var v Session
@@ -268,7 +326,7 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var apps, providers string
 	var mfa, secondFactor, native int64
 	var handle sql.NullString
-	if err := sc.Scan(&v.ID, &handle, &v.Subject, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
+	if err := sc.Scan(&handle, &v.Subject, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
 		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa, &secondFactor, &native, &v.ProofSecret); err != nil {
 		return nil, err
 	}
@@ -287,13 +345,17 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	return &v, nil
 }
 
-// Get loads a session by key.
+// Get loads a session by key, selecting on the key's digest; the session answers with id as its ID.
 func (s *SQLStore) Get(ctx context.Context, id string) (*Session, error) {
-	v, err := scanSession(s.db.QueryRowContext(ctx, sessionSelect+` WHERE sessionKey = ?`, id))
+	v, err := scanSession(s.db.QueryRowContext(ctx, sessionSelect+` WHERE sessionKeyDigest = ?`, sessionKeyDigest(id)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return v, err
+	if err != nil {
+		return nil, err
+	}
+	v.ID = id
+	return v, nil
 }
 
 // Touch refreshes lastUsedAt and, when newExpiry is non-nil, the expiry.
@@ -301,9 +363,9 @@ func (s *SQLStore) Touch(ctx context.Context, id string, newExpiry *time.Time) e
 	var res sql.Result
 	var err error
 	if newExpiry != nil {
-		res, err = s.db.ExecContext(ctx, `UPDATE tesseraSessions SET lastUsedAt = ?, expiresAt = ? WHERE sessionKey = ?`, s.now().Unix(), newExpiry.Unix(), id)
+		res, err = s.db.ExecContext(ctx, `UPDATE tesseraSessions SET lastUsedAt = ?, expiresAt = ? WHERE sessionKeyDigest = ?`, s.now().Unix(), newExpiry.Unix(), sessionKeyDigest(id))
 	} else {
-		res, err = s.db.ExecContext(ctx, `UPDATE tesseraSessions SET lastUsedAt = ? WHERE sessionKey = ?`, s.now().Unix(), id)
+		res, err = s.db.ExecContext(ctx, `UPDATE tesseraSessions SET lastUsedAt = ? WHERE sessionKeyDigest = ?`, s.now().Unix(), sessionKeyDigest(id))
 	}
 	if err != nil {
 		return err
@@ -316,7 +378,7 @@ func (s *SQLStore) Touch(ctx context.Context, id string, newExpiry *time.Time) e
 
 // Delete removes a session by key.
 func (s *SQLStore) Delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tesseraSessions WHERE sessionKey = ?`, id)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tesseraSessions WHERE sessionKeyDigest = ?`, sessionKeyDigest(id))
 	if err != nil {
 		return err
 	}
@@ -331,7 +393,7 @@ func (s *SQLStore) Delete(ctx context.Context, id string) error {
 // new key.
 func (s *SQLStore) Rotate(ctx context.Context, id string) (string, error) {
 	newID := s.newID()
-	res, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKey = ?, handle = ?, proofSecret = ?, lastUsedAt = ? WHERE sessionKey = ?`, newID, s.newHandle(), randomProofSecret(), s.now().Unix(), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKeyDigest = ?, handle = ?, proofSecret = ?, lastUsedAt = ? WHERE sessionKeyDigest = ?`, sessionKeyDigest(newID), s.newHandle(), randomProofSecret(), s.now().Unix(), sessionKeyDigest(id))
 	if err != nil {
 		return "", err
 	}
@@ -341,7 +403,7 @@ func (s *SQLStore) Rotate(ctx context.Context, id string) (string, error) {
 	return newID, nil
 }
 
-// GetByHandle loads the session handle names. An empty handle names none.
+// GetByHandle loads the session handle names, with no key (an empty ID). An empty handle names none.
 func (s *SQLStore) GetByHandle(ctx context.Context, handle string) (*Session, error) {
 	if handle == "" {
 		return nil, ErrNotFound
@@ -362,7 +424,7 @@ func (s *SQLStore) RotateByHandle(ctx context.Context, handle string) (string, e
 		return "", ErrNotFound
 	}
 	newHandle := s.newHandle()
-	res, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKey = ?, handle = ?, proofSecret = ?, lastUsedAt = ? WHERE handle = ?`, s.newID(), newHandle, randomProofSecret(), s.now().Unix(), handle)
+	res, err := s.db.ExecContext(ctx, `UPDATE tesseraSessions SET sessionKeyDigest = ?, handle = ?, proofSecret = ?, lastUsedAt = ? WHERE handle = ?`, sessionKeyDigest(s.newID()), newHandle, randomProofSecret(), s.now().Unix(), handle)
 	if err != nil {
 		return "", err
 	}
@@ -400,7 +462,8 @@ func (s *SQLStore) WipeSubject(ctx context.Context, partition, subject string) (
 	return n, nil
 }
 
-// ListSubjectSessions returns every unexpired session for (partition, subject) at the current instant.
+// ListSubjectSessions returns every unexpired session for (partition, subject) at the current
+// instant, each with no key (an empty ID).
 func (s *SQLStore) ListSubjectSessions(ctx context.Context, partition, subject string) ([]*Session, error) {
 	if partition == "" {
 		return nil, ErrPartitionRequired

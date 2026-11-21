@@ -11,6 +11,7 @@ package tessera
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -27,7 +28,10 @@ var ErrPartitionRequired = errors.New("tessera: partition is required")
 // ExpiresAt is a pointer: nil means MaxAge/rolling semantics (no fixed expiry).
 //
 // ID is the session key: the secret a browser's cookie carries, which proves the session by
-// itself. Handle is the session's public handle: a second value, not secret, which a signed token
+// itself. A store keeps only the key's digest (sessionKeyDigest), never the key: Create,
+// CreateWithID and Rotate return the key, Get answers with the key it was given, and a session
+// read by its handle or listed for its subject carries no key (ID is empty). Handle is the
+// session's public handle: a second value, not secret, which a signed token
 // carries as its sid and which every record a session is named in outside the store holds. A
 // handle proves nothing alone; it selects the record for a caller a token already proved. The
 // store sets it at creation, ignoring any value the caller supplies, and replaces it together with
@@ -87,7 +91,9 @@ func (s *Session) Clone() *Session {
 // implementation; the auth node gets a Turso-backed one. Callers program against this type.
 // Create, WipeSubject and ListSubjectSessions return ErrPartitionRequired for an empty partition
 // before touching any row; Get, Touch, Delete and Rotate select by session key alone, because the
-// key is the bearer secret the cookie carries.
+// key is the bearer secret the cookie carries. A store selects on the key's digest
+// (sessionKeyDigest) and keeps no key, so a session it answers by handle or by subject has an empty
+// ID.
 //
 // GetByHandle, RotateByHandle and DeleteByHandle select by the session's public handle instead:
 // the session check, rotation and revoke of a caller a signed token proved, whose token names the
@@ -104,6 +110,16 @@ type SessionStore interface {
 	GetByHandle(ctx context.Context, handle string) (*Session, error)
 	RotateByHandle(ctx context.Context, handle string) (newHandle string, err error)
 	DeleteByHandle(ctx context.Context, handle string) error
+}
+
+// sessionKeyDigest is what a store keeps of a session key, and what it selects a key's session by:
+// the key's SHA-256 in hex. A key is random (24 bytes from SQLStore, 16 from MemStore), so its
+// digest can be neither reversed nor guessed, and a reader of a store's rows, its backups or its
+// replicas learns no session from them. A lookup by key digests the key it is given and selects
+// on the digest, so the key itself is compared nowhere, in the store's code or in its database.
+func sessionKeyDigest(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
 }
 
 // handlePrefix begins every handle, so a handle read in a log or a record is never taken for a

@@ -16,18 +16,20 @@ var ErrNotFound = errors.New("tessera: session not found")
 // backend. Production wires a durable SessionStore (Turso/tursokv/mesh-RPC) with identical
 // semantics behind the same interface. Thread-safe. Clock injectable for deterministic tests.
 type MemStore struct {
-	mu      sync.Mutex
-	byID    map[string]*Session
-	nextNum int64
-	now     func() time.Time
-	newID   func() string
+	mu sync.Mutex
+	// byDigest holds each session under its key's digest (sessionKeyDigest), with an empty ID:
+	// like SQLStore, the store keeps no key.
+	byDigest map[string]*Session
+	nextNum  int64
+	now      func() time.Time
+	newID    func() string
 	// newHandle makes each public handle; randomHandle outside a test.
 	newHandle func() string
 }
 
 // NewMemStore builds an empty in-memory store.
 func NewMemStore() *MemStore {
-	return &MemStore{byID: map[string]*Session{}, now: time.Now, newID: randomID, newHandle: randomHandle}
+	return &MemStore{byDigest: map[string]*Session{}, now: time.Now, newID: randomID, newHandle: randomHandle}
 }
 
 func randomID() string {
@@ -59,31 +61,34 @@ func (m *MemStore) create(s *Session) (string, int64, error) {
 	id := m.newID()
 	m.nextNum++
 	cp := s.Clone()
-	cp.ID = id
+	cp.ID = ""
 	cp.Handle = m.newHandle()
 	cp.ProofSecret = randomProofSecret()
 	if cp.IssuedAt.IsZero() {
 		cp.IssuedAt = m.now()
 	}
 	cp.LastUsedAt = cp.IssuedAt
-	m.byID[id] = cp
+	m.byDigest[sessionKeyDigest(id)] = cp
 	return id, m.nextNum, nil
 }
 
+// Get loads a session by key, selecting on the key's digest; the session answers with id as its ID.
 func (m *MemStore) Get(_ context.Context, id string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.byID[id]
+	s, ok := m.byDigest[sessionKeyDigest(id)]
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return s.Clone(), nil
+	cp := s.Clone()
+	cp.ID = id
+	return cp, nil
 }
 
 func (m *MemStore) Touch(_ context.Context, id string, newExpiry *time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.byID[id]
+	s, ok := m.byDigest[sessionKeyDigest(id)]
 	if !ok {
 		return ErrNotFound
 	}
@@ -98,10 +103,11 @@ func (m *MemStore) Touch(_ context.Context, id string, newExpiry *time.Time) err
 func (m *MemStore) Delete(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.byID[id]; !ok {
+	digest := sessionKeyDigest(id)
+	if _, ok := m.byDigest[digest]; !ok {
 		return ErrNotFound
 	}
-	delete(m.byID, id)
+	delete(m.byDigest, digest)
 	return nil
 }
 
@@ -110,44 +116,44 @@ func (m *MemStore) Delete(_ context.Context, id string) error {
 func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.byID[id]
+	digest := sessionKeyDigest(id)
+	s, ok := m.byDigest[digest]
 	if !ok {
 		return "", ErrNotFound
 	}
 	newID := m.newID()
-	s.ID = newID
 	s.Handle = m.newHandle()
 	s.ProofSecret = randomProofSecret()
 	s.LastUsedAt = m.now()
-	m.byID[newID] = s
-	delete(m.byID, id)
+	m.byDigest[sessionKeyDigest(newID)] = s
+	delete(m.byDigest, digest)
 	return newID, nil
 }
 
-// keyOfLocked returns the key of the session handle names. The caller holds m.mu. The scan is
-// over every session because this store is the reference and test backend, whose session count
-// is small; SQLStore answers the same lookup from its handle index.
-func (m *MemStore) keyOfLocked(handle string) (string, bool) {
+// digestOfLocked returns the key digest of the session handle names. The caller holds m.mu. The
+// scan is over every session because this store is the reference and test backend, whose session
+// count is small; SQLStore answers the same lookup from its handle index.
+func (m *MemStore) digestOfLocked(handle string) (string, bool) {
 	if handle == "" {
 		return "", false
 	}
-	for id, s := range m.byID {
+	for digest, s := range m.byDigest {
 		if s.Handle == handle {
-			return id, true
+			return digest, true
 		}
 	}
 	return "", false
 }
 
-// GetByHandle loads the session handle names.
+// GetByHandle loads the session handle names, with no key (an empty ID).
 func (m *MemStore) GetByHandle(_ context.Context, handle string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	id, ok := m.keyOfLocked(handle)
+	digest, ok := m.digestOfLocked(handle)
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return m.byID[id].Clone(), nil
+	return m.byDigest[digest].Clone(), nil
 }
 
 // RotateByHandle re-keys the session handle names under a fresh key and a fresh handle, dropping
@@ -155,18 +161,16 @@ func (m *MemStore) GetByHandle(_ context.Context, handle string) (*Session, erro
 func (m *MemStore) RotateByHandle(_ context.Context, handle string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	id, ok := m.keyOfLocked(handle)
+	digest, ok := m.digestOfLocked(handle)
 	if !ok {
 		return "", ErrNotFound
 	}
-	s := m.byID[id]
-	newID := m.newID()
-	s.ID = newID
+	s := m.byDigest[digest]
 	s.Handle = m.newHandle()
 	s.ProofSecret = randomProofSecret()
 	s.LastUsedAt = m.now()
-	m.byID[newID] = s
-	delete(m.byID, id)
+	m.byDigest[sessionKeyDigest(m.newID())] = s
+	delete(m.byDigest, digest)
 	return s.Handle, nil
 }
 
@@ -174,11 +178,11 @@ func (m *MemStore) RotateByHandle(_ context.Context, handle string) (string, err
 func (m *MemStore) DeleteByHandle(_ context.Context, handle string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	id, ok := m.keyOfLocked(handle)
+	digest, ok := m.digestOfLocked(handle)
 	if !ok {
 		return ErrNotFound
 	}
-	delete(m.byID, id)
+	delete(m.byDigest, digest)
 	return nil
 }
 
@@ -190,16 +194,16 @@ func (m *MemStore) WipeSubject(_ context.Context, partition, subject string) (in
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
-	for id, s := range m.byID {
+	for digest, s := range m.byDigest {
 		if s.Partition == partition && s.Subject == subject {
-			delete(m.byID, id)
+			delete(m.byDigest, digest)
 			n++
 		}
 	}
 	return n, nil
 }
 
-// ListSubjectSessions returns every session for (partition, subject).
+// ListSubjectSessions returns every session for (partition, subject), each with no key (an empty ID).
 func (m *MemStore) ListSubjectSessions(_ context.Context, partition, subject string) ([]*Session, error) {
 	if partition == "" {
 		return nil, ErrPartitionRequired
@@ -207,7 +211,7 @@ func (m *MemStore) ListSubjectSessions(_ context.Context, partition, subject str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Session
-	for _, s := range m.byID {
+	for _, s := range m.byDigest {
 		if s.Partition == partition && s.Subject == subject {
 			out = append(out, s.Clone())
 		}
@@ -221,9 +225,9 @@ func (m *MemStore) PurgeExpired(_ context.Context, before time.Time) (int64, err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var n int64
-	for id, s := range m.byID {
+	for digest, s := range m.byDigest {
 		if s.ExpiresAt != nil && s.ExpiresAt.Before(before) {
-			delete(m.byID, id)
+			delete(m.byDigest, digest)
 			n++
 		}
 	}

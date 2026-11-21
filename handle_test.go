@@ -37,8 +37,8 @@ func TestEverySessionHasAPublicHandleApartFromItsKey(t *testing.T) {
 				t.Fatalf("handle %q for key %q: want a fresh %q value the store chose", got.Handle, key, handlePrefix)
 			}
 			byHandle, err := store.GetByHandle(ctx, got.Handle)
-			if err != nil || byHandle.ID != key || byHandle.Subject != "u1" {
-				t.Fatalf("GetByHandle = %+v, %v; want the session keyed %q", byHandle, err, key)
+			if err != nil || byHandle.ID != "" || byHandle.Subject != "u1" || byHandle.Handle != got.Handle {
+				t.Fatalf("GetByHandle = %+v, %v; want the session of key %q, with no key", byHandle, err, key)
 			}
 			if _, err := store.Get(ctx, got.Handle); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("Get(handle) err = %v; a handle must never select as a key", err)
@@ -78,8 +78,8 @@ func TestARotationByHandleIsSingleUseAndReplacesKeyAndHandle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetByHandle(new): %v", err)
 			}
-			if rotated.ID == key || !rotated.Native || rotated.Subject != "u1" {
-				t.Fatalf("rotated record %+v: want a new key and the record kept", rotated)
+			if rotated.ID != "" || !rotated.Native || rotated.Subject != "u1" {
+				t.Fatalf("rotated record %+v: want the record kept, with no key", rotated)
 			}
 			if _, err := store.GetByHandle(ctx, old.Handle); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("old handle err = %v; want ErrNotFound", err)
@@ -182,10 +182,10 @@ func TestInitSchemaGivesEveryOlderRowAHandle(t *testing.T) {
 	if !strings.HasPrefix(one.Handle, handlePrefix) || one.Handle == two.Handle {
 		t.Fatalf("older rows read handles %q and %q; want two distinct handles", one.Handle, two.Handle)
 	}
-	if got, err := s.GetByHandle(ctx, one.Handle); err != nil || got.ID != "k-one" {
-		t.Fatalf("GetByHandle(backfilled) = %+v, %v; want k-one", got, err)
+	if got, err := s.GetByHandle(ctx, one.Handle); err != nil || got.Subject != "u1" || got.Handle != one.Handle {
+		t.Fatalf("GetByHandle(backfilled) = %+v, %v; want k-one's session", got, err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE tesseraSessions SET handle = ? WHERE sessionKey = 'k-two'`, one.Handle); err == nil {
+	if _, err := db.ExecContext(ctx, `UPDATE tesseraSessions SET handle = ? WHERE handle = ?`, one.Handle, two.Handle); err == nil {
 		t.Fatal("two rows took one handle: the unique index is missing")
 	}
 }
