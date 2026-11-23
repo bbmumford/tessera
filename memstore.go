@@ -17,19 +17,26 @@ var ErrNotFound = errors.New("tessera: session not found")
 // semantics behind the same interface. Thread-safe. Clock injectable for deterministic tests.
 type MemStore struct {
 	mu sync.Mutex
-	// byDigest holds each session under its key's digest (sessionKeyDigest), with an empty ID:
+	// byDigest holds each session under its key's digest (digestUnder), with an empty ID:
 	// like SQLStore, the store keeps no key.
 	byDigest map[string]*Session
-	nextNum  int64
-	now      func() time.Time
-	newID    func() string
+	// digests keys every digest under a key the store drew for itself: its sessions never leave
+	// the process, so no other store needs to digest as it does.
+	digests *sessionKeyDigests
+	nextNum int64
+	now     func() time.Time
+	newID   func() string
 	// newHandle makes each public handle; randomHandle outside a test.
 	newHandle func() string
 }
 
-// NewMemStore builds an empty in-memory store.
+// NewMemStore builds an empty in-memory store, whose session-key digests are keyed by
+// MinDigestKeyBytes random bytes it draws for itself.
 func NewMemStore() *MemStore {
-	return &MemStore{byDigest: map[string]*Session{}, now: time.Now, newID: randomID, newHandle: randomHandle}
+	key := make([]byte, MinDigestKeyBytes)
+	_, _ = rand.Read(key)
+	return &MemStore{byDigest: map[string]*Session{}, now: time.Now, newID: randomID, newHandle: randomHandle,
+		digests: newSessionKeyDigests(DigestKeys{Current: key})}
 }
 
 func randomID() string {
@@ -68,7 +75,7 @@ func (m *MemStore) create(s *Session) (string, int64, error) {
 		cp.IssuedAt = m.now()
 	}
 	cp.LastUsedAt = cp.IssuedAt
-	m.byDigest[sessionKeyDigest(id)] = cp
+	m.byDigest[m.digests.digest(id)] = cp
 	return id, m.nextNum, nil
 }
 
@@ -76,7 +83,7 @@ func (m *MemStore) create(s *Session) (string, int64, error) {
 func (m *MemStore) Get(_ context.Context, id string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.byDigest[sessionKeyDigest(id)]
+	s, ok := m.byDigest[m.digests.digest(id)]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -88,7 +95,7 @@ func (m *MemStore) Get(_ context.Context, id string) (*Session, error) {
 func (m *MemStore) Touch(_ context.Context, id string, newExpiry *time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.byDigest[sessionKeyDigest(id)]
+	s, ok := m.byDigest[m.digests.digest(id)]
 	if !ok {
 		return ErrNotFound
 	}
@@ -103,7 +110,7 @@ func (m *MemStore) Touch(_ context.Context, id string, newExpiry *time.Time) err
 func (m *MemStore) Delete(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	digest := sessionKeyDigest(id)
+	digest := m.digests.digest(id)
 	if _, ok := m.byDigest[digest]; !ok {
 		return ErrNotFound
 	}
@@ -116,7 +123,7 @@ func (m *MemStore) Delete(_ context.Context, id string) error {
 func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	digest := sessionKeyDigest(id)
+	digest := m.digests.digest(id)
 	s, ok := m.byDigest[digest]
 	if !ok {
 		return "", ErrNotFound
@@ -125,7 +132,7 @@ func (m *MemStore) Rotate(_ context.Context, id string) (string, error) {
 	s.Handle = m.newHandle()
 	s.ProofSecret = randomProofSecret()
 	s.LastUsedAt = m.now()
-	m.byDigest[sessionKeyDigest(newID)] = s
+	m.byDigest[m.digests.digest(newID)] = s
 	delete(m.byDigest, digest)
 	return newID, nil
 }
@@ -169,7 +176,7 @@ func (m *MemStore) RotateByHandle(_ context.Context, handle string) (string, err
 	s.Handle = m.newHandle()
 	s.ProofSecret = randomProofSecret()
 	s.LastUsedAt = m.now()
-	m.byDigest[sessionKeyDigest(m.newID())] = s
+	m.byDigest[m.digests.digest(m.newID())] = s
 	delete(m.byDigest, digest)
 	return s.Handle, nil
 }
