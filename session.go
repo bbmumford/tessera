@@ -64,6 +64,12 @@ type Session struct {
 	// cookie. Only creation sets it, and Touch and Rotate keep the row's value. An edge that admits
 	// only a browser session refuses one carrying it, whatever carried its id to the edge.
 	Native bool
+	// PartitionVia names how the sign-in that minted the session chose Partition: the rung of the
+	// sign-in gateway's partition ladder (library authgw's PartitionVia values), "" when its creator
+	// named none. Only creation sets it (Manager.CreateAppSessionWith, Manager.MintWith), and Touch
+	// and Rotate keep the row's value, so the session holds how its partition was chosen beside the
+	// partition itself.
+	PartitionVia string
 	// ProofSecret keys the anti-CSRF proof a cookie-authenticated change carries (library
 	// security/requestproof): the page the platform serves holds it and MACs each change with it,
 	// and library httpscope RequireRequestProof verifies that MAC against this value. The store sets

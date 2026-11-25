@@ -244,34 +244,21 @@ func (m *Manager) expiry(maxAgeSeconds int) *time.Time {
 // domain. partition is stamped on the session; an empty one is refused by the store and no cookie is
 // set.
 func (m *Manager) Mint(w http.ResponseWriter, r *http.Request, subject, provider, partition string, opts *Options) (string, error) {
-	domain, err := m.deriveDomain(r)
-	if err != nil {
-		return "", fmt.Errorf("derive domain: %w", err)
-	}
-	eff := m.effectiveOptions(opts, domain)
-	now := m.now()
-	s := &Session{
-		Subject:    subject,
-		Provider:   provider,
-		Partition:  partition,
-		IssuedAt:   now,
-		LastUsedAt: now,
-		ExpiresAt:  m.expiry(eff.MaxAgeSeconds),
-	}
-	id, err := m.store.Create(r.Context(), s)
-	if err != nil {
-		return "", err
-	}
-	if err := enforceCookieSize(id); err != nil {
-		return "", err
-	}
-	m.setCookie(w, eff, id)
-	return id, nil
+	return m.MintWith(w, r, AppSession{Subject: subject, Provider: provider, Partition: partition}, opts)
 }
 
 // MintWithMeta is Mint plus captured client metadata (browser/device/platform). HTTP ceremony is
 // identical regardless of which store owns the row.
 func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, subject, provider, browser, deviceType, platform, partition string, opts *Options) (string, error) {
+	return m.MintWith(w, r, AppSession{Subject: subject, Provider: provider, Browser: browser, DeviceType: deviceType, Platform: platform, Partition: partition}, opts)
+}
+
+// MintWith is the one cookie mint Mint and MintWithMeta run: it stores a's subject, provider,
+// partition, PartitionVia and client metadata with the Manager's clock and the options' lifetime,
+// and issues the cookie scoped to the request's validated root domain. a's MaxAgeSeconds and
+// creation marks are not read: the cookie's lifetime is the options', and a browser session carries
+// neither mark at its mint. An empty partition is refused by the store and no cookie is set.
+func (m *Manager) MintWith(w http.ResponseWriter, r *http.Request, a AppSession, opts *Options) (string, error) {
 	domain, err := m.deriveDomain(r)
 	if err != nil {
 		return "", fmt.Errorf("derive domain: %w", err)
@@ -279,15 +266,16 @@ func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, subject, 
 	eff := m.effectiveOptions(opts, domain)
 	now := m.now()
 	s := &Session{
-		Subject:    subject,
-		Provider:   provider,
-		Partition:  partition,
-		IssuedAt:   now,
-		LastUsedAt: now,
-		ExpiresAt:  m.expiry(eff.MaxAgeSeconds),
-		Browser:    browser,
-		DeviceType: deviceType,
-		Platform:   platform,
+		Subject:      a.Subject,
+		Provider:     a.Provider,
+		Partition:    a.Partition,
+		PartitionVia: a.PartitionVia,
+		IssuedAt:     now,
+		LastUsedAt:   now,
+		ExpiresAt:    m.expiry(eff.MaxAgeSeconds),
+		Browser:      a.Browser,
+		DeviceType:   a.DeviceType,
+		Platform:     a.Platform,
 	}
 	id, err := m.store.Create(r.Context(), s)
 	if err != nil {
@@ -305,44 +293,61 @@ func (m *Manager) MintWithMeta(w http.ResponseWriter, r *http.Request, subject, 
 // be a LocalSessionStore, because the numeric id has no mesh-RPC equivalent — a thin gateway gets an
 // error. maxAgeSeconds<=0 defaults to 30 days.
 func (m *Manager) CreateAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
-	return m.createAppSession(ctx, subject, provider, browser, deviceType, platform, partition, maxAgeSeconds, false, false)
+	return m.CreateAppSessionWith(ctx, AppSession{Subject: subject, Provider: provider, Browser: browser, DeviceType: deviceType, Platform: platform, Partition: partition, MaxAgeSeconds: maxAgeSeconds})
 }
 
 // CreateSecondFactorAppSession is CreateAppSession for a sign-in that completed a second factor: the
 // session is stored with SecondFactor set. Its caller is the login step that verified the second
 // factor, and its reader is an edge that admits only such a session.
 func (m *Manager) CreateSecondFactorAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
-	return m.createAppSession(ctx, subject, provider, browser, deviceType, platform, partition, maxAgeSeconds, true, false)
+	return m.CreateAppSessionWith(ctx, AppSession{Subject: subject, Provider: provider, Browser: browser, DeviceType: deviceType, Platform: platform, Partition: partition, MaxAgeSeconds: maxAgeSeconds, SecondFactor: true})
 }
 
 // CreateNativeAppSession is CreateAppSession for a native app's sign-in: the session is stored with
 // Native set and SecondFactor unset. Its caller is the code exchange that hands the app its token
 // pair, and its reader is an edge that admits only a browser session.
 func (m *Manager) CreateNativeAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int) (sessionKey string, sessionID int64, err error) {
-	return m.createAppSession(ctx, subject, provider, browser, deviceType, platform, partition, maxAgeSeconds, false, true)
+	return m.CreateAppSessionWith(ctx, AppSession{Subject: subject, Provider: provider, Browser: browser, DeviceType: deviceType, Platform: platform, Partition: partition, MaxAgeSeconds: maxAgeSeconds, Native: true})
 }
 
-func (m *Manager) createAppSession(ctx context.Context, subject, provider, browser, deviceType, platform, partition string, maxAgeSeconds int, secondFactor, native bool) (sessionKey string, sessionID int64, err error) {
+// AppSession is what CreateAppSessionWith mints: the fields a creator sets on a session with no
+// browser cookie. MaxAgeSeconds<=0 defaults to 30 days. SecondFactor and Native are the creation
+// marks CreateSecondFactorAppSession and CreateNativeAppSession set; PartitionVia is how the sign-in
+// chose Partition (Session.PartitionVia).
+type AppSession struct {
+	Subject, Provider, Partition, PartitionVia string
+	Browser, DeviceType, Platform              string
+	MaxAgeSeconds                              int
+	SecondFactor, Native                       bool
+}
+
+// CreateAppSessionWith is the one creation every CreateAppSession variant runs: it stores a, with
+// the Manager's clock and expiry, through the Store, which must be a LocalSessionStore, and returns
+// the session key and numeric id. The sign-in gateway calls it to record the partition rung beside
+// the partition.
+func (m *Manager) CreateAppSessionWith(ctx context.Context, a AppSession) (sessionKey string, sessionID int64, err error) {
 	local, ok := m.store.(LocalSessionStore)
 	if !ok {
 		return "", 0, errors.New("tessera: CreateAppSession requires a LocalSessionStore (auth node only)")
 	}
+	maxAgeSeconds := a.MaxAgeSeconds
 	if maxAgeSeconds <= 0 {
 		maxAgeSeconds = 86400 * 30
 	}
 	now := m.now()
 	s := &Session{
-		Subject:      subject,
-		Provider:     provider,
-		Partition:    partition,
+		Subject:      a.Subject,
+		Provider:     a.Provider,
+		Partition:    a.Partition,
+		PartitionVia: a.PartitionVia,
 		IssuedAt:     now,
 		LastUsedAt:   now,
 		ExpiresAt:    m.expiry(maxAgeSeconds),
-		Browser:      browser,
-		DeviceType:   deviceType,
-		Platform:     platform,
-		SecondFactor: secondFactor,
-		Native:       native,
+		Browser:      a.Browser,
+		DeviceType:   a.DeviceType,
+		Platform:     a.Platform,
+		SecondFactor: a.SecondFactor,
+		Native:       a.Native,
 	}
 	return local.CreateWithID(ctx, s)
 }

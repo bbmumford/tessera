@@ -82,7 +82,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			secondFactor INTEGER NOT NULL DEFAULT 0,
 			native INTEGER NOT NULL DEFAULT 0,
 			handle TEXT,
-			proofSecret TEXT NOT NULL DEFAULT ''
+			proofSecret TEXT NOT NULL DEFAULT '',
+			partitionVia TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idxTesseraSessionsPartitionSubject ON tesseraSessions(partition, subject)`,
 		`CREATE INDEX IF NOT EXISTS idxTesseraSessionsExpires ON tesseraSessions(expiresAt)`,
@@ -103,7 +104,23 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 	if err := s.addHandles(ctx); err != nil {
 		return err
 	}
+	if err := s.addPartitionVia(ctx); err != nil {
+		return err
+	}
 	return s.addProofSecrets(ctx)
+}
+
+// addPartitionVia adds Session.PartitionVia's column to a tesseraSessions table created without
+// it, so InitSchema leaves every table it ran over holding the columns insert and sessionSelect
+// name; a row already there reads "", a session whose creator named no rung. A table holding the
+// column is left as it is, probed by a SELECT as addMarkColumn's are.
+func (s *SQLStore) addPartitionVia(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT partitionVia FROM tesseraSessions LIMIT 0`)
+	if err == nil {
+		return rows.Close()
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE tesseraSessions ADD COLUMN partitionVia TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 // digestSessionKeys leaves every tesseraSessions table InitSchema ran over keeping session-key
@@ -310,10 +327,10 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO tesseraSessions
-			(sessionKeyDigest, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(sessionKeyDigest, handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret, partitionVia)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.digests.digest(key), s.newHandle(), cp.Subject, cp.Partition, cp.AudienceRoot, cp.Provider, cp.IssuedAt.Unix(), expiryArg(cp.ExpiresAt), cp.LastUsedAt.Unix(),
-		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor), boolToInt(cp.Native), randomProofSecret())
+		cp.Browser, cp.DeviceType, cp.Platform, jsonStrings(cp.AllowedApps), jsonStrings(cp.AllowedProviders), boolToInt(cp.RequireMFA), boolToInt(cp.SecondFactor), boolToInt(cp.Native), randomProofSecret(), cp.PartitionVia)
 	if err != nil {
 		return "", 0, err
 	}
@@ -335,7 +352,7 @@ func (s *SQLStore) CreateWithID(ctx context.Context, sess *Session) (string, int
 
 // sessionSelect reads every Session field a row holds. A row holds no session key, so a session it
 // scans has an empty ID until Get sets the key it was asked for.
-const sessionSelect = `SELECT handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret FROM tesseraSessions`
+const sessionSelect = `SELECT handle, subject, partition, audienceRoot, provider, issuedAt, expiresAt, lastUsedAt, browser, deviceType, platform, allowedApps, allowedProviders, requireMfa, secondFactor, native, proofSecret, partitionVia FROM tesseraSessions`
 
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var v Session
@@ -345,7 +362,7 @@ func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var mfa, secondFactor, native int64
 	var handle sql.NullString
 	if err := sc.Scan(&handle, &v.Subject, &v.Partition, &v.AudienceRoot, &v.Provider, &issued, &expires, &lastUsed,
-		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa, &secondFactor, &native, &v.ProofSecret); err != nil {
+		&v.Browser, &v.DeviceType, &v.Platform, &apps, &providers, &mfa, &secondFactor, &native, &v.ProofSecret, &v.PartitionVia); err != nil {
 		return nil, err
 	}
 	v.IssuedAt = time.Unix(issued, 0)
