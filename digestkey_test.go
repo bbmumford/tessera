@@ -35,7 +35,11 @@ func openSessionsDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	})
 	return db
 }
 
@@ -60,7 +64,11 @@ func storedDigests(t *testing.T, db *sql.DB) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("rows.Close: %v", err)
+		}
+	}()
 	out := map[string]bool{}
 	for rows.Next() {
 		var d string

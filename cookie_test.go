@@ -132,8 +132,12 @@ func TestLogoutAll_WipesTheSubjectInItsPartition(t *testing.T) {
 	// two sessions for acme/u1, one for a different partition
 	w := httptest.NewRecorder()
 	id, _ := m.Mint(w, reqTo("app.example.com"), "u1", "email", "acme", nil)
-	m.Mint(httptest.NewRecorder(), reqTo("app.example.com"), "u1", "email", "acme", nil)
-	store.Create(context.Background(), &Session{Subject: "u1", Partition: "globex"})
+	if _, err := m.Mint(httptest.NewRecorder(), reqTo("app.example.com"), "u1", "email", "acme", nil); err != nil {
+		t.Fatalf("m.Mint: %v", err)
+	}
+	if _, err := store.Create(context.Background(), &Session{Subject: "u1", Partition: "globex"}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
 
 	r := reqTo("app.example.com")
 	r.AddCookie(&http.Cookie{Name: "orbtr_session", Value: id})

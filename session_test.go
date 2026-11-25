@@ -66,9 +66,15 @@ func TestRotate_ReKeysAndDropsOld(t *testing.T) {
 func TestWipeAndListSelectOnPartitionAndSubject(t *testing.T) {
 	ctx := context.Background()
 	m := newTestStore(time.Unix(1000, 0))
-	m.Create(ctx, sample("acme", "u1"))
-	m.Create(ctx, sample("acme", "u1"))
-	m.Create(ctx, sample("globex", "u1")) // same subject, DIFFERENT partition
+	if _, err := m.Create(ctx, sample("acme", "u1")); err != nil {
+		t.Fatalf("m.Create: %v", err)
+	}
+	if _, err := m.Create(ctx, sample("acme", "u1")); err != nil {
+		t.Fatalf("m.Create: %v", err)
+	}
+	if _, err := m.Create(ctx, sample("globex", "u1")); err != nil {
+		t.Fatalf("m.Create: %v", err)
+	} // same subject, DIFFERENT partition
 	acme, _ := m.ListSubjectSessions(ctx, "acme", "u1")
 	if len(acme) != 2 {
 		t.Fatalf("acme/u1 should have 2 sessions; got %d", len(acme))
@@ -94,9 +100,15 @@ func TestPurgeExpired(t *testing.T) {
 	s2 := sample("acme", "u2")
 	s2.ExpiresAt = &future
 	s3 := sample("acme", "u3") // nil expiry → MaxAge, never purged
-	m.Create(ctx, s1)
-	m.Create(ctx, s2)
-	m.Create(ctx, s3)
+	if _, err := m.Create(ctx, s1); err != nil {
+		t.Fatalf("m.Create: %v", err)
+	}
+	if _, err := m.Create(ctx, s2); err != nil {
+		t.Fatalf("m.Create: %v", err)
+	}
+	if _, err := m.Create(ctx, s3); err != nil {
+		t.Fatalf("m.Create: %v", err)
+	}
 	n, _ := m.PurgeExpired(ctx, time.Unix(1000, 0))
 	if n != 1 {
 		t.Fatalf("PurgeExpired removed %d, want 1 (only the past-expiry one)", n)

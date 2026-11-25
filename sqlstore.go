@@ -535,7 +535,7 @@ func (s *SQLStore) ListSubjectSessions(ctx context.Context, partition, subject s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Session
 	for rows.Next() {
 		v, err := scanSession(rows)
@@ -557,3 +557,9 @@ func (s *SQLStore) PurgeExpired(ctx context.Context, before time.Time) (int64, e
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// closeRows is the deferred Close of every query's rows in this package.
+// database/sql closes rows itself once Next reports the end, so a normal return
+// leaves nothing to close, and an early return already carries the error that
+// stopped the read; its result is dropped.
+func closeRows(rows *sql.Rows) { _ = rows.Close() }

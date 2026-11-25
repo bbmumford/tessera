@@ -70,7 +70,11 @@ func TestInitSchemaAddsNativeToAnOlderTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	})
 	if _, err := db.ExecContext(ctx, `CREATE TABLE tesseraSessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		sessionKey TEXT UNIQUE NOT NULL,

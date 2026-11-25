@@ -17,7 +17,11 @@ func newSQLStore(t *testing.T, now time.Time) *SQLStore {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1) // keep the :memory: DB on one connection
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	})
 	s := NewSQLStore(db)
 	s.now = func() time.Time { return now }
 	if err := s.InitSchema(context.Background()); err != nil {
@@ -92,9 +96,15 @@ func TestSQLStore_WipeAndListSelectOnPartitionAndSubject(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1000, 0)
 	s := newSQLStore(t, now)
-	s.Create(ctx, &Session{Subject: "u1", Partition: "acme"})
-	s.Create(ctx, &Session{Subject: "u1", Partition: "acme"})
-	s.Create(ctx, &Session{Subject: "u1", Partition: "globex"}) // same subject, different partition
+	if _, err := s.Create(ctx, &Session{Subject: "u1", Partition: "acme"}); err != nil {
+		t.Fatalf("s.Create: %v", err)
+	}
+	if _, err := s.Create(ctx, &Session{Subject: "u1", Partition: "acme"}); err != nil {
+		t.Fatalf("s.Create: %v", err)
+	}
+	if _, err := s.Create(ctx, &Session{Subject: "u1", Partition: "globex"}); err != nil {
+		t.Fatalf("s.Create: %v", err)
+	} // same subject, different partition
 	if got, _ := s.ListSubjectSessions(ctx, "acme", "u1"); len(got) != 2 {
 		t.Fatalf("acme/u1 must have 2 live sessions; got %d", len(got))
 	}
@@ -113,9 +123,15 @@ func TestSQLStore_ListExcludesExpiredAndPurge(t *testing.T) {
 	s := newSQLStore(t, now)
 	past := time.Unix(1000, 0)
 	future := time.Unix(9000, 0)
-	s.Create(ctx, &Session{Subject: "u1", Partition: "acme", ExpiresAt: &past})   // expired
-	s.Create(ctx, &Session{Subject: "u1", Partition: "acme", ExpiresAt: &future}) // live
-	s.Create(ctx, &Session{Subject: "u1", Partition: "acme"})                     // no expiry → live
+	if _, err := s.Create(ctx, &Session{Subject: "u1", Partition: "acme", ExpiresAt: &past}); err != nil {
+		t.Fatalf("s.Create: %v", err)
+	} // expired
+	if _, err := s.Create(ctx, &Session{Subject: "u1", Partition: "acme", ExpiresAt: &future}); err != nil {
+		t.Fatalf("s.Create: %v", err)
+	} // live
+	if _, err := s.Create(ctx, &Session{Subject: "u1", Partition: "acme"}); err != nil {
+		t.Fatalf("s.Create: %v", err)
+	} // no expiry → live
 	if got, _ := s.ListSubjectSessions(ctx, "acme", "u1"); len(got) != 2 {
 		t.Fatalf("ListSubjectSessions must exclude the expired one; got %d", len(got))
 	}
