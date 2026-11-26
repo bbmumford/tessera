@@ -44,6 +44,10 @@ type CachingStore struct {
 
 	mu    sync.RWMutex
 	cache map[string]cacheEntry
+	// gen counts the evictions and clears made under mu. A read-through Get caches what the
+	// backing store answered only while gen still holds the value it read before asking, so a
+	// Delete, Rotate or WipeSubject that lands while the read is in flight is never undone by it.
+	gen uint64
 
 	hits   atomic.Uint64
 	misses atomic.Uint64
@@ -78,6 +82,10 @@ func (c *CachingStore) Stats() (hits, misses uint64) {
 // unexpired by its own ExpiresAt. The two are independent: a session expiring in
 // five seconds must not be served for the cache's thirty, or the cache would
 // extend the life of the session it is only supposed to remember.
+//
+// A read the backing store answers while an eviction or clear runs returns that
+// answer but caches nothing (storeUnchanged), so a logout that lands during the
+// read takes effect on the next request.
 func (c *CachingStore) Get(ctx context.Context, id string) (*Session, error) {
 	if c == nil || c.inner == nil {
 		return nil, ErrNoStore
@@ -87,11 +95,12 @@ func (c *CachingStore) Get(ctx context.Context, id string) (*Session, error) {
 		return s, nil
 	}
 	c.misses.Add(1)
+	gen := c.generation()
 	s, err := c.inner.Get(ctx, id)
 	if err != nil || s == nil {
 		return s, err
 	}
-	c.store(id, s)
+	c.storeUnchanged(id, s, gen)
 	// Clone on the way out as well as in: a caller that mutates the returned
 	// session must not reach the copy the next request will be served from.
 	return s.Clone(), nil
@@ -110,10 +119,21 @@ func (c *CachingStore) lookup(id string) (*Session, bool) {
 	return e.session.Clone(), true
 }
 
-func (c *CachingStore) store(id string, s *Session) {
+// generation reads gen, the count storeUnchanged compares against.
+func (c *CachingStore) generation() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.gen
+}
+
+// storeUnchanged caches s under id unless an eviction or clear ran since gen was read: the session
+// it read may be the one that mutation removed, and caching it would serve it for the TTL.
+func (c *CachingStore) storeUnchanged(id string, s *Session, gen uint64) {
 	c.mu.Lock()
-	c.cache[id] = cacheEntry{session: s.Clone(), cachedAt: time.Now()}
-	c.sweepLocked()
+	if c.gen == gen {
+		c.cache[id] = cacheEntry{session: s.Clone(), cachedAt: time.Now()}
+		c.sweepLocked()
+	}
 	c.mu.Unlock()
 }
 
@@ -134,6 +154,7 @@ func (c *CachingStore) sweepLocked() {
 func (c *CachingStore) evict(id string) {
 	c.mu.Lock()
 	delete(c.cache, id)
+	c.gen++
 	c.mu.Unlock()
 }
 
@@ -215,6 +236,7 @@ func (c *CachingStore) WipeSubject(ctx context.Context, partition, subject strin
 	n, err := c.inner.WipeSubject(ctx, partition, subject)
 	c.mu.Lock()
 	c.cache = map[string]cacheEntry{}
+	c.gen++
 	c.mu.Unlock()
 	return n, err
 }
@@ -275,6 +297,7 @@ func (c *CachingStore) evictHandle(handle string) {
 			delete(c.cache, k)
 		}
 	}
+	c.gen++
 	c.mu.Unlock()
 }
 
