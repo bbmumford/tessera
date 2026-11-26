@@ -282,11 +282,26 @@ func (m *Manager) MintWith(w http.ResponseWriter, r *http.Request, a AppSession,
 	if err != nil {
 		return "", err
 	}
-	if err := enforceCookieSize(id); err != nil {
+	if err := m.refuseOversizeKey(r.Context(), id); err != nil {
 		return "", err
 	}
 	m.setCookie(w, eff, id)
 	return id, nil
+}
+
+// refuseOversizeKey returns enforceCookieSize's refusal of a key the store just minted, after
+// deleting that key's session: the key cannot reach the browser, so the session it names would
+// otherwise stay live with no holder. The store mints the key, so the size is known only once the
+// row exists. A failed delete is reported beside the refusal.
+func (m *Manager) refuseOversizeKey(ctx context.Context, key string) error {
+	err := enforceCookieSize(key)
+	if err == nil {
+		return nil
+	}
+	if derr := m.store.Delete(ctx, key); derr != nil && !errors.Is(derr, ErrNotFound) {
+		return fmt.Errorf("%w (and its session was not deleted: %v)", err, derr)
+	}
+	return err
 }
 
 // CreateAppSession creates a server-side session for a mobile/desktop login without a browser cookie
@@ -369,7 +384,7 @@ func (m *Manager) Rotate(w http.ResponseWriter, r *http.Request, opts *Options) 
 	if err != nil {
 		return "", err
 	}
-	if err := enforceCookieSize(newID); err != nil {
+	if err := m.refuseOversizeKey(r.Context(), newID); err != nil {
 		return "", err
 	}
 	m.setCookie(w, eff, newID)
