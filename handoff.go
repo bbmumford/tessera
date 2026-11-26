@@ -67,13 +67,19 @@ type HandoffConfig struct {
 // audience is absent, unknown, or different from its own host is passed through
 // unredeemed rather than being honoured for whoever asked.
 //
-// Every refusal is a pass-through, never an error to the client. A handoff that
-// cannot be redeemed leaves the request exactly as it arrived, so the endpoint's
-// ordinary authentication decides what happens next — a failed redemption must
-// not itself deny a request that was never relying on one.
+// A redemption answers 303 See Other to the same URL with the token and audience
+// parameters taken off, carrying the minted cookie, so the token leaves the
+// address bar, the history and the Referer a page would send, and the next
+// request arrives with the session. A request whose cookie already names a live
+// session is never redeemed: a handoff does not replace a signed-in browser's
+// session, so a link carrying someone else's token cannot sign that browser into
+// another account. It is answered with the same clean redirect, and the token is
+// left unspent.
 //
-// It runs before AttachSession in a chain, so a freshly minted session is visible
-// to the same request that carried the token.
+// Every other refusal is a pass-through, never an error to the client. A handoff
+// that cannot be redeemed leaves the request exactly as it arrived, so the
+// endpoint's ordinary authentication decides what happens next — a failed
+// redemption must not itself deny a request that was never relying on one.
 func (m *Manager) HandoffRedemption(cfg HandoffConfig) func(http.Handler) http.Handler {
 	tokenParam := cfg.TokenParam
 	if tokenParam == "" {
@@ -106,6 +112,11 @@ func (m *Manager) HandoffRedemption(cfg HandoffConfig) func(http.Handler) http.H
 				next.ServeHTTP(w, r)
 				return
 			}
+			if m.holdsLiveSession(r, cfg.Options) {
+				m.logf("handoff: not redeemed over a live session audience=%q", audience)
+				http.Redirect(w, r, withoutParams(r, tokenParam, audParam), http.StatusSeeOther)
+				return
+			}
 
 			h, ok := cfg.Redeemer.Redeem(r.Context(), token, audience)
 			if !ok || h.Subject == "" || h.Partition == "" {
@@ -119,10 +130,44 @@ func (m *Manager) HandoffRedemption(cfg HandoffConfig) func(http.Handler) http.H
 				// It falls through unauthenticated and the endpoint's own auth
 				// answers, which is the same outcome as an expired token.
 				m.logf("handoff: mint failed audience=%q: %v", audience, err)
+				next.ServeHTTP(w, r)
+				return
 			}
-			next.ServeHTTP(w, r)
+			http.Redirect(w, r, withoutParams(r, tokenParam, audParam), http.StatusSeeOther)
 		})
 	}
+}
+
+// holdsLiveSession reports whether the request's session cookie names a session the store holds
+// and that has not expired.
+func (m *Manager) holdsLiveSession(r *http.Request, opts *Options) bool {
+	c, err := r.Cookie(m.effectiveOptions(opts, "").CookieName)
+	if err != nil || c == nil || c.Value == "" {
+		return false
+	}
+	s, err := m.store.Get(r.Context(), c.Value)
+	if err != nil || s == nil {
+		return false
+	}
+	return s.ExpiresAt == nil || s.ExpiresAt.After(m.now())
+}
+
+// withoutParams is r's path and query with the named query parameters taken off, the target of
+// the redirect that clears a handoff token from the URL. It is a path, never an absolute URL, so
+// the redirect cannot leave the host the request reached.
+func withoutParams(r *http.Request, names ...string) string {
+	q := r.URL.Query()
+	for _, n := range names {
+		q.Del(n)
+	}
+	target := r.URL.EscapedPath()
+	if target == "" || target[0] != '/' || strings.HasPrefix(target, "//") {
+		target = "/"
+	}
+	if enc := q.Encode(); enc != "" {
+		target += "?" + enc
+	}
+	return target
 }
 
 // audienceIsThisHost reports whether the claimed audience is both a root this
