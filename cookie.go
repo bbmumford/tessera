@@ -377,7 +377,10 @@ func (m *Manager) Rotate(w http.ResponseWriter, r *http.Request, opts *Options) 
 }
 
 // LogoutCurrent deletes the current server-side session and clears its cookie. A missing cookie is a
-// no-op (nil error).
+// no-op (nil error), and so is a cookie whose session the store no longer holds (ErrNotFound): the
+// cookie is cleared and nothing is left to end. Any other failed delete is returned with the cookie
+// left in place, because the session still validates server-side, and telling the browser it signed
+// out would hide that.
 func (m *Manager) LogoutCurrent(w http.ResponseWriter, r *http.Request, opts *Options) error {
 	domain, err := m.deriveDomain(r)
 	if err != nil {
@@ -388,7 +391,9 @@ func (m *Manager) LogoutCurrent(w http.ResponseWriter, r *http.Request, opts *Op
 	if err != nil || c == nil || c.Value == "" {
 		return nil
 	}
-	_ = m.store.Delete(r.Context(), c.Value)
+	if err := m.store.Delete(r.Context(), c.Value); err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("tessera: delete session: %w", err)
+	}
 	m.clearCookie(w, eff.CookieName, domain)
 	return nil
 }
