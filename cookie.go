@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -79,11 +80,14 @@ func (s StaticDomainResolver) RootDomainForHost(host string) (string, error) {
 	return best, nil
 }
 
+// hostWithoutPort is an HTTP Host with its port, and an IPv6 literal's brackets, taken off:
+// "app.example.com:443" is "app.example.com" and "[2001:db8::1]:8443" is "2001:db8::1". Cutting at
+// the first colon instead would leave an IPv6 literal as "" or "[".
 func hostWithoutPort(host string) string {
-	if i := strings.IndexByte(host, ':'); i >= 0 {
-		return host[:i]
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
 	}
-	return host
+	return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 }
 
 // Config wires a Manager. Store and Domains are required; PartitionFromContext and Logf are optional.

@@ -134,10 +134,7 @@ func (m *Manager) HandoffRedemption(cfg HandoffConfig) func(http.Handler) http.H
 // replayed at another. Checking only the first would let any endpoint in the
 // deployment redeem any other's token.
 func (m *Manager) audienceIsThisHost(r *http.Request, audience string) bool {
-	host := strings.ToLower(r.Host)
-	if i := strings.IndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
+	host := hostWithoutPort(strings.ToLower(r.Host))
 	if host == "" || audience != host {
 		return false
 	}
