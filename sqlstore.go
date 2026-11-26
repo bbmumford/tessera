@@ -54,10 +54,33 @@ var (
 	_ LocalSessionStore = (*SQLStore)(nil)
 )
 
+// sessionKeyBytes is how many random bytes a session key SQLStore mints holds; the key is their
+// lower-case hex.
+const sessionKeyBytes = 24
+
+// ErrSessionKeyForm is returned by Create and CreateWithID for a session whose ID, the key a caller
+// chose for it, is not the form the store mints: sessionKeyBytes random bytes in lower-case hex.
+// A store that kept any caller-chosen key would let a consumer that forwards a client's value into
+// Session.ID mint a session under a key the client already knows.
+var ErrSessionKeyForm = errors.New("tessera: a chosen session key is not the minted form")
+
 func randomSessionKey() string {
-	b := make([]byte, 24)
+	b := make([]byte, sessionKeyBytes)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// mintedKeyForm reports whether key has the form randomSessionKey mints.
+func mintedKeyForm(key string) bool {
+	if len(key) != 2*sessionKeyBytes {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		if c := key[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // InitSchema creates the sessions table + indexes (idempotent); run once at boot before use.
@@ -317,6 +340,8 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	key = cp.ID
 	if key == "" {
 		key = s.newID()
+	} else if !mintedKeyForm(key) {
+		return "", 0, ErrSessionKeyForm
 	}
 	now := s.now()
 	if cp.IssuedAt.IsZero() {
@@ -338,7 +363,9 @@ func (s *SQLStore) insert(ctx context.Context, sess *Session) (key string, numID
 	return key, numID, nil
 }
 
-// Create inserts a session and returns its key (the cookie value).
+// Create inserts a session and returns its key (the cookie value): a key the store mints, or the
+// session's ID when the caller chose one of the minted form, which is refused (ErrSessionKeyForm)
+// otherwise.
 func (s *SQLStore) Create(ctx context.Context, sess *Session) (string, error) {
 	key, _, err := s.insert(ctx, sess)
 	return key, err
