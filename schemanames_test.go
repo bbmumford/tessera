@@ -24,7 +24,7 @@ func TestTheSchemaDeclaresOnlyRuleNames(t *testing.T) {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
-	if err := NewSQLStore(db).InitSchema(ctx); err != nil {
+	if err := keyedSQLStore(t, db).InitSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
 	bad := ruleBreakingNames(t, ctx, db)

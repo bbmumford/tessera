@@ -2,7 +2,7 @@
 
 The session system: the server-side record a browser cookie or an app token points at, binding a signed-in subject to the partition the sign-in established.
 
-- **`SessionStore`**: one store contract, with an in-memory store (`NewMemStore`), a `database/sql` store (`NewSQLStore`) and a short read-through cache over either (`NewCachingStore`).
+- **`SessionStore`**: one store contract, with an in-memory store (`NewMemStore`), a `database/sql` store (`OpenSQLStore`, which keeps only an HMAC-SHA256 digest of each session key under the `DigestKeys` every opener of one sessions database shares) and a short read-through cache over either (`NewCachingStore`).
 - **`Manager`**: mints, rotates and clears the session cookie on a validated root domain (`DomainResolver`; `StaticDomainResolver` for a fixed list), creates app and native-app sessions, and logs out one session or all of a subject's.
 - **Middleware**: `AttachSession` puts the request's session on its context for `FromContext` and `GetSessionFromContext`; `HandoffRedemption` redeems a cross-domain single-use token into a local session, only for an audience that names an allowed root and matches the requested host.
 
@@ -13,7 +13,8 @@ go get github.com/bbmumford/tessera
 ```
 
 ```go
-store := tessera.NewSQLStore(db) // any database/sql driver
+store, err := tessera.OpenSQLStore(db, tessera.DigestKeys{Current: lookupKey}) // any database/sql driver; lookupKey >= 32 bytes
+if err != nil { /* ... */ }
 if err := store.InitSchema(ctx); err != nil { /* ... */ } // idempotent; once at boot
 
 m, err := tessera.NewManager(tessera.Config{

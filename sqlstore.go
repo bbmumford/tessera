@@ -28,15 +28,6 @@ type SQLStore struct {
 	digests *sessionKeyDigests
 }
 
-// NewSQLStore builds a store over an opened *sql.DB whose digests are keyed by nothing: each row
-// holds its key's SHA-256. Call InitSchema once before use.
-//
-// TODO: NewSQLStore goes, and a store opened without DigestKeys is refused, once every opener of a
-// sessions database calls OpenSQLStore.
-func NewSQLStore(db *sql.DB) *SQLStore {
-	return &SQLStore{db: db, now: time.Now, newID: randomSessionKey, newHandle: randomHandle, digests: &sessionKeyDigests{}}
-}
-
 // OpenSQLStore builds a store over an opened *sql.DB that keeps HMAC-SHA256 digests of its session
 // keys under keys (DigestKeys), or returns ErrDigestKey for keys it cannot digest under. Every
 // process opening one sessions database passes the same keys. Call InitSchema once before use.
@@ -44,9 +35,7 @@ func OpenSQLStore(db *sql.DB, keys DigestKeys) (*SQLStore, error) {
 	if err := keys.check(); err != nil {
 		return nil, err
 	}
-	s := NewSQLStore(db)
-	s.digests = newSessionKeyDigests(keys)
-	return s, nil
+	return &SQLStore{db: db, now: time.Now, newID: randomSessionKey, newHandle: randomHandle, digests: newSessionKeyDigests(keys)}, nil
 }
 
 var (

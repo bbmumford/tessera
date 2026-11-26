@@ -198,16 +198,10 @@ func (d *sessionKeyDigests) lookups(key string, now time.Time) []string {
 // replica learns no session from a row, and a party who can write it cannot place a row for a key
 // of its choosing, since neither can compute a digest without digestKey. A lookup by key digests
 // the key it is given and selects on the digest, so the key is compared nowhere, in the store's
-// code or its database. A nil digestKey is the store NewSQLStore opens, whose digest is the key's
-// SHA-256 in hex.
-//
-// TODO: the nil digestKey form goes when every opener of a sessions database passes DigestKeys to
-// OpenSQLStore.
+// code or its database. There is no unkeyed form: every store digests under a key (OpenSQLStore's
+// DigestKeys, or the one NewMemStore draws), so a table holds nothing a party without the key can
+// match a session key against.
 func digestUnder(digestKey []byte, key string) string {
-	if digestKey == nil {
-		sum := sha256.Sum256([]byte(key))
-		return hex.EncodeToString(sum[:])
-	}
 	mac := hmac.New(sha256.New, digestKey)
 	mac.Write([]byte(key))
 	return hex.EncodeToString(mac.Sum(nil))

@@ -98,7 +98,7 @@ func TestInitSchemaAddsNativeToAnOlderTable(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO tesseraSessions (sessionKey, subject, partition, secondFactor) VALUES ('k-old', 'u1', 'acme', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	s := NewSQLStore(db)
+	s := keyedSQLStore(t, db)
 	for i := 0; i < 2; i++ {
 		if err := s.InitSchema(ctx); err != nil {
 			t.Fatalf("InitSchema #%d: %v", i+1, err)

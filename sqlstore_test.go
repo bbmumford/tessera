@@ -10,6 +10,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// keyedSQLStore opens a store over db under a fixed current digest key.
+func keyedSQLStore(t *testing.T, db *sql.DB) *SQLStore {
+	t.Helper()
+	s, err := OpenSQLStore(db, DigestKeys{Current: digestKey('t')})
+	if err != nil {
+		t.Fatalf("OpenSQLStore: %v", err)
+	}
+	return s
+}
+
 func newSQLStore(t *testing.T, now time.Time) *SQLStore {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -22,7 +32,7 @@ func newSQLStore(t *testing.T, now time.Time) *SQLStore {
 			t.Errorf("db.Close: %v", err)
 		}
 	})
-	s := NewSQLStore(db)
+	s := keyedSQLStore(t, db)
 	s.now = func() time.Time { return now }
 	if err := s.InitSchema(context.Background()); err != nil {
 		t.Fatalf("InitSchema: %v", err)
