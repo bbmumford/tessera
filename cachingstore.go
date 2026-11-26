@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.
- * Queries: licensing@hstles.com
+ * Copyright (c) 2026 Brandon Miller-Mumford.
+ * Licensed under the MIT License; see LICENSE.
  */
 package tessera
 
@@ -33,11 +33,10 @@ const DefaultCacheTTL = 30 * time.Second
 // which also means cache growth is bounded by the number of real sessions, not by
 // what a caller can invent.
 //
-// Every mutation but Touch evicts before it returns, so a logout or rotation
-// takes effect on the next request rather than at the end of the TTL. Touch
-// updates the cached copy instead (see Touch). WipeSubject clears the cache
-// entirely: it removes sessions this layer cannot name, and evicting only what
-// it can name would leave the rest validating.
+// Every mutation evicts before it returns, so a logout or rotation takes effect
+// on the next request rather than at the end of the TTL. WipeSubject clears the
+// cache entirely: it removes sessions this layer cannot name, and evicting only
+// what it can name would leave the rest validating.
 type CachingStore struct {
 	inner SessionStore
 	ttl   time.Duration
@@ -145,34 +144,15 @@ func (c *CachingStore) Create(ctx context.Context, s *Session) (string, error) {
 	return c.inner.Create(ctx, s)
 }
 
-// Touch writes through and, once the backing store has accepted it, updates
-// the cached copy in place: LastUsedAt moves to now and, when newExpiry is set,
-// ExpiresAt to it, so the copy is never served with the old expiry. Evicting
-// instead would empty the cache behind AttachSession, which touches every
-// session it attaches, so no request there would ever be a hit. The entry keeps
-// the instant it was read from the backing store, so the TTL still bounds how
-// long a revocation made elsewhere goes unseen. A touch the backing store
-// refused evicts, because the store may no longer hold the session.
+// Touch writes through and evicts, because the cached copy carries the old
+// expiry and would otherwise be served with it until the TTL lapsed.
 func (c *CachingStore) Touch(ctx context.Context, id string, newExpiry *time.Time) error {
 	if c == nil || c.inner == nil {
 		return ErrNoStore
 	}
-	if err := c.inner.Touch(ctx, id, newExpiry); err != nil {
-		c.evict(id)
-		return err
-	}
-	c.mu.Lock()
-	if e, ok := c.cache[id]; ok {
-		touched := e.session.Clone()
-		touched.LastUsedAt = time.Now()
-		if newExpiry != nil {
-			exp := *newExpiry
-			touched.ExpiresAt = &exp
-		}
-		c.cache[id] = cacheEntry{session: touched, cachedAt: e.cachedAt}
-	}
-	c.mu.Unlock()
-	return nil
+	err := c.inner.Touch(ctx, id, newExpiry)
+	c.evict(id)
+	return err
 }
 
 // Delete writes through and evicts. The eviction happens whether or not the

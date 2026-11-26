@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.
- * Queries: licensing@hstles.com
+ * Copyright (c) 2026 Brandon Miller-Mumford.
+ * Licensed under the MIT License; see LICENSE.
  */
 package tessera
 
@@ -145,24 +145,17 @@ func TestCachingStoreRotateEvictsTheOldID(t *testing.T) {
 	}
 }
 
-func TestCachingStoreTouchUpdatesTheStaleExpiry(t *testing.T) {
+func TestCachingStoreTouchEvictsTheStaleExpiry(t *testing.T) {
 	inner := &countingStore{sess: liveSession("s1")}
 	c := NewCachingStore(inner, time.Hour)
 	ctx := context.Background()
 	_, _ = c.Get(ctx, "s1")
-	later := time.Now().Add(2 * time.Hour).Truncate(time.Second)
-	if err := c.Touch(ctx, "s1", &later); err != nil {
+	if err := c.Touch(ctx, "s1", nil); err != nil {
 		t.Fatal(err)
 	}
-	s, err := c.Get(ctx, "s1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inner.getCalls != 1 {
-		t.Fatalf("backing store reached %d times, want 1 — a touch emptied the cache", inner.getCalls)
-	}
-	if s.ExpiresAt == nil || !s.ExpiresAt.Equal(later) {
-		t.Fatalf("the cached copy carried the old expiry %v, want %v", s.ExpiresAt, later)
+	_, _ = c.Get(ctx, "s1")
+	if inner.getCalls != 2 {
+		t.Fatalf("backing store reached %d times, want 2 — the cached copy carried the old expiry", inner.getCalls)
 	}
 }
 
