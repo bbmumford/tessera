@@ -224,6 +224,29 @@ func (m *Manager) deriveDomain(r *http.Request) (string, error) {
 	return rootDomain, nil
 }
 
+// checkDomain refuses a cookie domain a session cookie may not be set on: one that is neither an
+// AllowedRoots entry nor a subdomain of one, or that the request's host is not within. It is what
+// holds an Options.Domain override to the same bound deriveDomain holds the derived domain to,
+// since Mint and Rotate would otherwise set the cookie on whatever domain the override names.
+func (m *Manager) checkDomain(r *http.Request, domain string) error {
+	d := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(domain), "."))
+	host := strings.ToLower(hostWithoutPort(r.Host))
+	if d == "" || (host != d && !strings.HasSuffix(host, "."+d)) {
+		return fmt.Errorf("tessera: cookie domain %q does not cover the request host %q", domain, r.Host)
+	}
+	allowed, err := m.domains.AllowedRoots()
+	if err != nil {
+		return fmt.Errorf("tessera: allowed roots: %w", err)
+	}
+	for _, a := range allowed {
+		root := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(a), "."))
+		if root != "" && (d == root || strings.HasSuffix(d, "."+root)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("tessera: cookie domain %q is not within AllowedRoots", domain)
+}
+
 func (m *Manager) setCookie(w http.ResponseWriter, eff *Options, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     eff.CookieName,
@@ -269,6 +292,9 @@ func (m *Manager) MintWith(w http.ResponseWriter, r *http.Request, a AppSession,
 		return "", fmt.Errorf("derive domain: %w", err)
 	}
 	eff := m.effectiveOptions(opts, domain)
+	if err := m.checkDomain(r, eff.Domain); err != nil {
+		return "", err
+	}
 	now := m.now()
 	s := &Session{
 		Subject:      a.Subject,
@@ -380,6 +406,9 @@ func (m *Manager) Rotate(w http.ResponseWriter, r *http.Request, opts *Options) 
 		return "", fmt.Errorf("derive domain: %w", err)
 	}
 	eff := m.effectiveOptions(opts, domain)
+	if err := m.checkDomain(r, eff.Domain); err != nil {
+		return "", err
+	}
 	c, err := r.Cookie(eff.CookieName)
 	if err != nil || c == nil || c.Value == "" {
 		return "", errors.New("tessera: no session cookie to rotate")
