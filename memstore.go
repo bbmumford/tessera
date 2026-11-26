@@ -210,16 +210,19 @@ func (m *MemStore) WipeSubject(_ context.Context, partition, subject string) (in
 	return n, nil
 }
 
-// ListSubjectSessions returns every session for (partition, subject), each with no key (an empty ID).
+// ListSubjectSessions returns every unexpired session for (partition, subject) at the store's
+// current instant, each with no key (an empty ID): the set SQLStore lists, so a consumer tested
+// against this store sees what the durable one answers.
 func (m *MemStore) ListSubjectSessions(_ context.Context, partition, subject string) ([]*Session, error) {
 	if partition == "" {
 		return nil, ErrPartitionRequired
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := m.now()
 	var out []*Session
 	for _, s := range m.byDigest {
-		if s.Partition == partition && s.Subject == subject {
+		if s.Partition == partition && s.Subject == subject && (s.ExpiresAt == nil || s.ExpiresAt.After(now)) {
 			out = append(out, s.Clone())
 		}
 	}
