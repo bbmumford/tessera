@@ -3,7 +3,6 @@ package tessera
 import (
 	"context"
 	"errors"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -96,8 +95,9 @@ func TestMint_RefusesAnEmptyPartitionAndSetsNoCookie(t *testing.T) {
 }
 
 // TestManagerWithoutPartitionResolverCannotListOrWipe: a Manager built with no
-// PartitionFromContext still mints in the partition it is given, but its list and wipe resolve to
-// an empty partition and must fail, leaving the session and its cookie in place.
+// PartitionFromContext still mints in the partition it is given, but its list and wipe by subject
+// resolve to an empty partition and must fail, leaving the session in place. LogoutAll is not one
+// of them: it wipes in the partition of the session the cookie names.
 func TestManagerWithoutPartitionResolverCannotListOrWipe(t *testing.T) {
 	now := time.Unix(1000, 0)
 	store := newTestStore(now)
@@ -115,17 +115,11 @@ func TestManagerWithoutPartitionResolverCannotListOrWipe(t *testing.T) {
 		t.Fatalf("Mint in a partition: %v", err)
 	}
 
-	r := reqTo("app.example.com")
-	r.AddCookie(&http.Cookie{Name: "orbtr_session", Value: id})
-	w := httptest.NewRecorder()
-	if err := m.LogoutAll(w, r, nil); !errors.Is(err, ErrPartitionRequired) {
-		t.Fatalf("LogoutAll with no partition resolver = %v, want ErrPartitionRequired", err)
-	}
-	if sc := w.Header().Get("Set-Cookie"); sc != "" {
-		t.Fatalf("a failed LogoutAll cleared the cookie: %q", sc)
+	if _, err := m.WipeSubject(context.Background(), "u1"); !errors.Is(err, ErrPartitionRequired) {
+		t.Fatalf("WipeSubject with no partition resolver = %v, want ErrPartitionRequired", err)
 	}
 	if _, err := store.Get(context.Background(), id); err != nil {
-		t.Fatalf("a failed LogoutAll removed the session: %v", err)
+		t.Fatalf("a refused WipeSubject removed the session: %v", err)
 	}
 	if _, err := m.GetSubjectSessions(context.Background(), "u1"); !errors.Is(err, ErrPartitionRequired) {
 		t.Fatalf("GetSubjectSessions with no partition resolver = %v, want ErrPartitionRequired", err)

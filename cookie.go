@@ -96,9 +96,10 @@ type Config struct {
 	// CookieName is the default cookie name (e.g. "orbtr_session"). Required and non-empty; an
 	// Options.CookieName overrides it per call.
 	CookieName string
-	// PartitionFromContext resolves the partition LogoutAll and GetSubjectSessions select on from the
-	// request context. Nil resolves every request to an empty partition, which the store refuses, so a
-	// Manager without it can mint, rotate and delete sessions but cannot list or wipe them.
+	// PartitionFromContext resolves the partition GetSubjectSessions and WipeSubject select on from
+	// the request context. Nil resolves every request to an empty partition, which the store refuses,
+	// so a Manager without it can mint, rotate and delete sessions, and LogoutAll can wipe in the
+	// partition of the session a cookie names, but it cannot list or wipe a subject's sessions.
 	PartitionFromContext func(context.Context) string
 	// DefaultMaxAgeSeconds overrides the 30-day cookie/session lifetime default when > 0.
 	DefaultMaxAgeSeconds int
@@ -392,10 +393,14 @@ func (m *Manager) LogoutCurrent(w http.ResponseWriter, r *http.Request, opts *Op
 	return nil
 }
 
-// LogoutAll wipes every session of the current subject in the request's partition and clears the
-// cookie. The subject is resolved from context first, then from the cookie's session. A failed wipe
-// is returned with the cookie left in place: the caller asked for every session to end, and reporting
-// success while the others still validate would tell them it had.
+// LogoutAll wipes every session of the subject of the session the request's cookie names, in that
+// session's own partition, and clears the cookie. With no cookie it takes the session AttachSession
+// attached. The partition is the session's, never the one PartitionFromContext resolves for the
+// request: the two differ when a request reaches another partition's surface, and wiping in the
+// request's would leave the caller's own sessions validating while deleting another partition's
+// sessions of the same subject string. An expired session, or none, names no one to sign out. A
+// failed wipe is returned with the cookie left in place: the caller asked for every session to end,
+// and reporting success while the others still validate would tell them it had.
 func (m *Manager) LogoutAll(w http.ResponseWriter, r *http.Request, opts *Options) error {
 	domain, err := m.deriveDomain(r)
 	if err != nil {
@@ -403,21 +408,18 @@ func (m *Manager) LogoutAll(w http.ResponseWriter, r *http.Request, opts *Option
 	}
 	eff := m.effectiveOptions(opts, domain)
 
-	var subject string
-	if s, ok := FromContext(r); ok && s != nil {
-		subject = s.Subject
-	}
-	if subject == "" {
-		if c, err := r.Cookie(eff.CookieName); err == nil && c != nil && c.Value != "" {
-			if s, err := m.store.Get(r.Context(), c.Value); err == nil && s != nil {
-				subject = s.Subject
-			}
+	var sess *Session
+	if c, err := r.Cookie(eff.CookieName); err == nil && c != nil && c.Value != "" {
+		if s, err := m.store.Get(r.Context(), c.Value); err == nil && s != nil {
+			sess = s
 		}
+	} else if s, ok := FromContext(r); ok {
+		sess = s
 	}
-	if subject == "" {
+	if sess == nil || sess.Subject == "" || (sess.ExpiresAt != nil && !sess.ExpiresAt.After(m.now())) {
 		return errors.New("tessera: no session subject found to wipe")
 	}
-	if _, err := m.store.WipeSubject(r.Context(), m.partition(r.Context()), subject); err != nil {
+	if _, err := m.store.WipeSubject(r.Context(), sess.Partition, sess.Subject); err != nil {
 		return fmt.Errorf("tessera: wipe sessions: %w", err)
 	}
 	m.clearCookie(w, eff.CookieName, domain)
