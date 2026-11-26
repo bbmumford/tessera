@@ -188,9 +188,9 @@ func (s *SQLStore) digestSessionKeys(ctx context.Context) error {
 }
 
 // addHandles leaves every tesseraSessions table InitSchema ran over holding a public handle on
-// every row and a unique index over them. A table created before the column gains it, and each row
-// without a handle is given one, so a session minted before handles existed is named by its token's
-// next refresh like any other. The column is nullable because SQLite adds no column with a UNIQUE
+// every row and a unique index over them. A table without the column gains it, and each row
+// without a handle is given one, so every session, whatever table it was stored in, is named by its
+// token's next refresh. The column is nullable because SQLite adds no column with a UNIQUE
 // constraint; the index tesseraSessionsHandle holds the uniqueness instead, and every insert and
 // rotation writes a handle. The rows are read first and written after, so no row is updated while
 // its query is still open.
@@ -230,9 +230,9 @@ func (s *SQLStore) addHandles(ctx context.Context) error {
 }
 
 // addProofSecrets leaves every tesseraSessions table InitSchema ran over holding a proof secret
-// (Session.ProofSecret) on every row: a table created before the column gains it, and each row
-// whose secret is empty is given a fresh one, so a session minted before secrets existed can prove
-// a change from its next page load without signing in again. The rows are read first and written
+// (Session.ProofSecret) on every row: a table without the column gains it, and each row whose
+// secret is empty is given a fresh one, so a session stored without a secret can prove a change
+// from its next page load without signing in again. The rows are read first and written
 // after, so no row is updated while its query is still open.
 func (s *SQLStore) addProofSecrets(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `SELECT proofSecret FROM tesseraSessions LIMIT 0`)
@@ -268,8 +268,8 @@ func (s *SQLStore) addProofSecrets(ctx context.Context) error {
 	return nil
 }
 
-// markColumns are the creation marks a tesseraSessions table created before
-// them lacks: Session.SecondFactor and Session.Native. Each is an INTEGER
+// markColumns are the creation marks a tesseraSessions table may lack:
+// Session.SecondFactor and Session.Native. Each is an INTEGER
 // NOT NULL DEFAULT 0, so a row already there reads false.
 var markColumns = []string{"secondFactor", "native"}
 
