@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 Brandon Miller-Mumford.
+ * Licensed under the MIT License; see LICENSE.
+ */
+
 // Package tessera is the session system. It defines the SessionStore contract and a neutral Session
 // record, so a consumer maps its own session type to tessera.Session at its boundary. A session binds
 // a subject to a partition; both are opaque strings the store keys on and never interprets.
