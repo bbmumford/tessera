@@ -1,6 +1,6 @@
 module github.com/bbmumford/tessera
 
-go 1.25.0
+go 1.27.4
 
 require modernc.org/sqlite v1.53.0
 
