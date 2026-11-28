@@ -48,6 +48,10 @@ type CachingStore struct {
 	// backing store answered only while gen still holds the value it read before asking, so a
 	// Delete, Rotate or WipeSubject that lands while the read is in flight is never undone by it.
 	gen uint64
+	// nextSweep is the earliest instant sweepLocked scans the map again. lookup refuses an entry by
+	// its age once a TTL has passed since it was cached, so scanning more than once per TTL would
+	// find little to drop while holding the write lock for a full pass on every miss.
+	nextSweep time.Time
 
 	hits   atomic.Uint64
 	misses atomic.Uint64
@@ -138,12 +142,18 @@ func (c *CachingStore) storeUnchanged(id string, s *Session, gen uint64) {
 }
 
 // sweepLocked drops entries past the TTL. It runs on insert rather than on a
-// timer so the type owns no goroutine a caller would have to stop.
+// timer so the type owns no goroutine a caller would have to stop, and scans at
+// most once per TTL (nextSweep), so an entry stays in the map at most two TTLs
+// after it was cached and the map holds no more than two TTLs' worth of misses.
 func (c *CachingStore) sweepLocked() {
 	if len(c.cache) < 128 {
 		return
 	}
 	now := time.Now()
+	if now.Before(c.nextSweep) {
+		return
+	}
+	c.nextSweep = now.Add(c.ttl)
 	for k, e := range c.cache {
 		if now.Sub(e.cachedAt) >= c.ttl {
 			delete(c.cache, k)
